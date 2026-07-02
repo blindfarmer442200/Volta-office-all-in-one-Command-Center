@@ -21,7 +21,9 @@ backends:
   ollama:
     enabled: true
     base_url: http://localhost:11434
-    model: llama3.1
+    # Pull with: ollama pull qwen3:3.5b  (adjust the tag to the Qwen 3.5
+    # variant you have pulled locally, e.g. qwen3:1.7b / qwen3:8b).
+    model: qwen3.5
     timeout_seconds: 60
 
   openai:

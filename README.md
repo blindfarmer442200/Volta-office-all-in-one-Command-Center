@@ -41,12 +41,18 @@ PYTHONPATH=src:. python -m bella_harness.cli redteam
 One interface (`BackendAbstraction`) over four backends, configured in
 `config/default.yaml`:
 
-| Backend    | Notes                                   |
-|------------|------------------------------------------|
-| Ollama     | Local-first, no API key required (default) |
-| OpenAI     | `OPENAI_API_KEY`                          |
-| Anthropic  | `ANTHROPIC_API_KEY`                       |
-| OpenRouter | `OPENROUTER_API_KEY`                      |
+| Backend    | Default model            | Notes                                    |
+|------------|--------------------------|-------------------------------------------|
+| Ollama     | `qwen3.5`                | Local-first, no API key required (default) |
+| OpenAI     | `gpt-4o-mini`            | `OPENAI_API_KEY`                          |
+| Anthropic  | `claude-3-5-sonnet-latest` | `ANTHROPIC_API_KEY`                     |
+| OpenRouter | `meta-llama/llama-3.1-70b-instruct` | `OPENROUTER_API_KEY`           |
+
+The default Ollama model is Qwen 3.5. Pull it locally with
+`ollama pull qwen3.5` (or point `backends.ollama.model` at whichever Qwen 3.5
+tag you have), then start the Ollama server before deferring any request to
+it. Override without editing config via
+`BELLA__BACKENDS__OLLAMA__MODEL=<tag>`.
 
 API keys are **only** ever read from environment variables named by each
 backend's `api_key_env` setting -- a literal key in a config file is a hard
