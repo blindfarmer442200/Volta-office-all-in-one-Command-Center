@@ -1,0 +1,50 @@
+# bella-harness default configuration
+#
+# API keys are NEVER read from this file. They are sourced exclusively from
+# environment variables (see backends.*.api_key_env below). Any api_key or
+# api_key_env value literally present in a config file is rejected at load
+# time to prevent secrets from being committed.
+
+harness:
+  # Fraction-of-traffic target the deterministic engine aims to resolve
+  # without invoking an LLM backend. Informational only; actual routing is
+  # rule-driven, not sampled to hit this number.
+  deterministic_target: 0.70
+  # Backend used when the deterministic engine defers to an LLM.
+  default_backend: ollama
+  fail_closed: true
+
+deterministic:
+  rules_file: null # null = use built-in rules in deterministic/rules.py
+
+backends:
+  ollama:
+    enabled: true
+    base_url: http://localhost:11434
+    model: llama3.1
+    timeout_seconds: 60
+
+  openai:
+    enabled: false
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
+    timeout_seconds: 60
+
+  anthropic:
+    enabled: false
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: https://api.anthropic.com/v1
+    model: claude-3-5-sonnet-latest
+    timeout_seconds: 60
+
+  openrouter:
+    enabled: false
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    model: meta-llama/llama-3.1-70b-instruct
+    timeout_seconds: 60
+
+redteam:
+  fail_on_any_breach: true
+  report_path: redteam-report.json
