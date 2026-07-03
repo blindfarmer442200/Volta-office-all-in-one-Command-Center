@@ -36,6 +36,7 @@ class Decision:
     action: Action
     category: str | None = None
     reason: str | None = None
+    severity: str | None = None
     response: str | None = None
     decoded_layers: list[str] = field(default_factory=list)
 
@@ -181,6 +182,7 @@ class DeterministicEngine:
                         action=Action.BLOCK,
                         category=rule.category,
                         reason=rule.description,
+                        severity=rule.severity,
                         decoded_layers=decoded_layers,
                     )
 

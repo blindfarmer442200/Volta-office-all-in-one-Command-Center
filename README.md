@@ -29,10 +29,15 @@ zero-inference gate in front of the model:
 ```bash
 pip install -r requirements.txt
 
-# Ask something through the harness
+# Requests the deterministic engine resolves on its own -- no backend needed
+PYTHONPATH=src python -m bella_harness.cli ask "hello"          # -> greeting
+PYTHONPATH=src python -m bella_harness.cli ask "2 + 2"          # -> 4
+
+# A free-form question defers to an LLM backend, so start Ollama first
+# (see Backends below); without a reachable backend it fails closed.
 PYTHONPATH=src python -m bella_harness.cli ask "What's the capital of France?"
 
-# Run the red-team suite
+# Run the red-team suite (fully offline, no backend or API keys)
 PYTHONPATH=src:. python -m bella_harness.cli redteam
 ```
 

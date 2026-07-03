@@ -23,6 +23,44 @@ def test_rejects_literal_api_key_in_config(tmp_path):
         load_config(bad_config)
 
 
+@pytest.mark.parametrize(
+    "yaml_body",
+    [
+        "backends:\n  openai:\n    api_key: sk-xxx\n",          # api_key
+        "backends:\n  openai:\n    apikey: sk-xxx\n",           # apikey
+        "backends:\n  openai:\n    secret: hunter2\n",          # secret
+        "backends:\n  openai:\n    token: abc123\n",            # token
+        "harness:\n  nested:\n    deeply:\n      secret: x\n",  # deeply nested
+    ],
+)
+def test_rejects_literal_secret_variants(tmp_path, yaml_body):
+    bad_config = tmp_path / "bad.yaml"
+    bad_config.write_text(yaml_body)
+    with pytest.raises(ConfigError):
+        load_config(bad_config)
+
+
+def test_allows_api_key_env_reference(tmp_path):
+    # api_key_env is the *name* of an env var, not a secret -- it must be allowed.
+    ok_config = tmp_path / "ok.yaml"
+    ok_config.write_text(
+        "harness:\n  default_backend: openai\n"
+        "backends:\n  openai:\n    enabled: true\n    api_key_env: OPENAI_API_KEY\n"
+    )
+    config = load_config(ok_config)
+    assert config["backends"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
+
+
+def test_rejects_secret_injected_via_env_override(tmp_path, monkeypatch):
+    # Even if a literal secret is smuggled in through an env override, the
+    # post-override re-validation must reject it.
+    ok_config = tmp_path / "ok.yaml"
+    ok_config.write_text("backends:\n  openai:\n    enabled: true\n    api_key_env: OPENAI_API_KEY\n")
+    monkeypatch.setenv("BELLA__BACKENDS__OPENAI__API_KEY", "sk-smuggled")
+    with pytest.raises(ConfigError):
+        load_config(ok_config)
+
+
 def test_missing_config_file_raises():
     with pytest.raises(ConfigError):
         load_config("/nonexistent/path/config.yaml")

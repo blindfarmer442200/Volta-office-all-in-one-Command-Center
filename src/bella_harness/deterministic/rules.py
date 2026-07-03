@@ -10,12 +10,26 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# Severity ranks how dangerous a matched technique is if it were to reach the
+# model. It carries no control-flow weight -- every BLOCK_RULES match blocks
+# regardless of severity -- it is metadata for reporting, triage, and tests.
+SEVERITY_CRITICAL = "critical"
+SEVERITY_HIGH = "high"
+SEVERITY_MEDIUM = "medium"
+
+VALID_SEVERITIES = frozenset({SEVERITY_CRITICAL, SEVERITY_HIGH, SEVERITY_MEDIUM})
+
 
 @dataclass(frozen=True)
 class Rule:
     category: str
     pattern: re.Pattern
     description: str
+    severity: str = SEVERITY_HIGH
+
+    def __post_init__(self) -> None:
+        if self.severity not in VALID_SEVERITIES:
+            raise ValueError(f"invalid severity {self.severity!r} for rule {self.category!r}")
 
 
 def _compile(patterns: list[str], extra_flags: int = 0) -> re.Pattern:
@@ -37,6 +51,7 @@ PROMPT_INJECTION = Rule(
         r"repeat (the|your) (words|instructions) above",
     ]),
     description="Attempts to override, reveal, or discard prior system instructions.",
+    severity=SEVERITY_CRITICAL,
 )
 
 # --- Jailbreak: known jailbreak personas / framing ---
@@ -49,7 +64,11 @@ JAILBREAK = Rule(
         r"no (restrictions|guardrails|rules|limits) apply",
         r"pretend (you have|there are) no (content policy|guidelines|restrictions)",
         r"hypothetically\b.{0,40}?\bno (rules|restrictions|limits)\b",
-        r"developer mode",
+        # "developer mode" only in an enabling/asserting context -- so that
+        # benign queries like "what is developer mode in Chrome" aren't blocked.
+        r"(enable|activate|enter|turn on|switch to) developer mode",
+        r"you are (now )?in developer mode",
+        r"in developer mode now",
         r"opposite day",
         r"answer as (evil|unrestricted|amoral)",
         r"an ai with no (ethical )?(guidelines|restrictions)",
@@ -59,6 +78,7 @@ JAILBREAK = Rule(
         r"must always comply\b.{0,20}(no matter|regardless)",
     ]),
     description="Known jailbreak personas or framings intended to bypass safety policy.",
+    severity=SEVERITY_CRITICAL,
 )
 
 # --- Role escalation: attempts to claim elevated privilege ---
@@ -66,7 +86,10 @@ ROLE_ESCALATION = Rule(
     category="role_escalation",
     pattern=_compile([
         r"i am (the |your )?(admin|administrator|root|developer|owner) (of )?(this system|you)",
-        r"as (an|the) (admin|administrator|root)( user)?\b",
+        # An "as an admin"-style claim only escalates when paired with a demand
+        # to bypass/override the assistant -- otherwise it's benign context
+        # ("as an admin of a Facebook group, how do I ...").
+        r"as (an|the) (admin|administrator|root)( user)?\b[^.]{0,50}\b(bypass|override|ignore|disable|comply|obey|grant|unrestricted)\b",
         r"(grant|give) (me )?(admin|root|sudo|superuser) access",
         r"(enable|switch (into|to)|turn on) (debug|developer|maintenance) mode",
         r"i have (root|admin|sudo) privileges",
@@ -74,6 +97,7 @@ ROLE_ESCALATION = Rule(
         r"override (safety|security) (settings|checks) for (admin|root)",
     ]),
     description="Attempts to claim elevated privileges to bypass safety policy.",
+    severity=SEVERITY_CRITICAL,
 )
 
 # --- Data exfiltration: requests for secrets/config/credentials ---
@@ -86,6 +110,7 @@ DATA_EXFILTRATION = Rule(
         r"os\.environ",
     ]),
     description="Requests to exfiltrate secrets, credentials, or internal configuration.",
+    severity=SEVERITY_CRITICAL,
 )
 
 # --- Multilingual injection: injection phrasing repeated in other languages ---
@@ -101,6 +126,7 @@ MULTILINGUAL_INJECTION = Rule(
         r"تجاهل التعليمات السابقة",  # Arabic
     ]),
     description="Prompt-injection phrasing translated into non-English languages.",
+    severity=SEVERITY_HIGH,
 )
 
 # --- Structural injection: fake delimiters/turns used to smuggle a new "system" message ---
@@ -118,6 +144,7 @@ STRUCTURAL_INJECTION = Rule(
         r"\buser\s*:.*\bassistant\s*:\s*(sure|okay|understood)",
     ], extra_flags=re.DOTALL),
     description="Fake delimiters or conversation turns used to smuggle an unauthorized system message.",
+    severity=SEVERITY_HIGH,
 )
 
 # --- Persona hijack: redefining the assistant's identity/rules wholesale ---
@@ -131,6 +158,7 @@ PERSONA_HIJACK = Rule(
         r"assume the (identity|persona|character) of .{0,40}with no (restrictions|filter)",
     ]),
     description="Attempts to wholesale-replace the assistant's identity and safety policy.",
+    severity=SEVERITY_HIGH,
 )
 
 # --- Authority impersonation: claiming to be the vendor/creator to force compliance ---
@@ -144,6 +172,7 @@ AUTHORITY_IMPERSONATION = Rule(
         r"authorized by (anthropic|openai) to bypass",
     ]),
     description="Claims of vendor/creator authority used to compel policy violations.",
+    severity=SEVERITY_HIGH,
 )
 
 # --- System prompt leak: extracting the hidden system prompt verbatim ---
@@ -157,6 +186,7 @@ SYSTEM_PROMPT_LEAK = Rule(
         r"summarize your (configuration|system prompt) in detail",
     ]),
     description="Attempts to extract the hidden system prompt verbatim or by summary.",
+    severity=SEVERITY_HIGH,
 )
 
 # --- Prompt leak via translation: asking for the system prompt in another language/format ---
@@ -169,6 +199,7 @@ PROMPT_LEAK_VIA_TRANSLATION = Rule(
         r"encode your system prompt in base64",
     ]),
     description="Attempts to exfiltrate the system prompt via translation or reformatting.",
+    severity=SEVERITY_MEDIUM,
 )
 
 # --- Trust escalation: multi-turn grooming before a final privilege-escalation ask ---
@@ -183,6 +214,7 @@ TRUST_ESCALATION = Rule(
         r"you already broke character once",
     ]),
     description="Multi-turn social-engineering framing used to leverage prior (fabricated) agreement.",
+    severity=SEVERITY_MEDIUM,
 )
 
 BLOCK_RULES: list[Rule] = [

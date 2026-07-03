@@ -32,6 +32,7 @@ class ProbeResult:
     expect: str
     actual_action: str
     passed: bool
+    severity: str | None = None  # severity of the rule that fired, if blocked
 
 
 @dataclass
@@ -47,6 +48,14 @@ class SuiteResult:
     def clean(self) -> bool:
         return self.breaches == 0 and self.false_positives == 0
 
+    def severity_breakdown(self) -> dict[str, int]:
+        """Count of blocked attack probes by the severity of the rule that fired."""
+        counts: dict[str, int] = {}
+        for r in self.results:
+            if r.severity is not None:
+                counts[r.severity] = counts.get(r.severity, 0) + 1
+        return counts
+
     def to_dict(self) -> dict:
         return {
             "total": self.total,
@@ -55,6 +64,7 @@ class SuiteResult:
             "false_positives": self.false_positives,
             "agents_covered": self.agents_covered,
             "clean": self.clean,
+            "severity_breakdown": self.severity_breakdown(),
             "results": [asdict(r) for r in self.results],
         }
 
@@ -75,6 +85,7 @@ def _evaluate_probe(engine: DeterministicEngine, probe: Probe) -> ProbeResult:
         expect=probe.expect,
         actual_action=decision.action.value,
         passed=passed,
+        severity=decision.severity if is_blocked else None,
     )
 
 
