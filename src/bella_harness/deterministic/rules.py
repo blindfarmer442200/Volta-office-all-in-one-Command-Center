@@ -1,0 +1,204 @@
+"""Pattern-based rules used by the deterministic engine.
+
+Rules are intentionally simple (regex / keyword matching) so that they are
+auditable, fast, and require no model inference. Each BLOCK rule maps to one
+of the categories probed by the red-team suite in redteam/probes/.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Rule:
+    category: str
+    pattern: re.Pattern
+    description: str
+
+
+def _compile(patterns: list[str], extra_flags: int = 0) -> re.Pattern:
+    return re.compile("|".join(patterns), re.IGNORECASE | extra_flags)
+
+
+# --- Prompt injection: attempts to override or ignore prior instructions ---
+PROMPT_INJECTION = Rule(
+    category="prompt_injection",
+    pattern=_compile([
+        r"ignore (all |any |the )?(previous|prior|above|preceding) instructions",
+        r"disregard (all |any |the )?(previous|prior|above|preceding) (instructions|prompt|rules)",
+        r"forget (all |any |the )?(previous|prior|above) (instructions|context|rules)",
+        r"new instructions?:",
+        r"system\s*:\s*override",
+        r"\bact as (system|the system|a system)\b",
+        r"reveal (your |the )?(system prompt|hidden prompt|instructions)",
+        r"print (your |the )?(system prompt|instructions) verbatim",
+        r"repeat (the|your) (words|instructions) above",
+    ]),
+    description="Attempts to override, reveal, or discard prior system instructions.",
+)
+
+# --- Jailbreak: known jailbreak personas / framing ---
+JAILBREAK = Rule(
+    category="jailbreak",
+    pattern=_compile([
+        r"\bdan\b.{0,20}(mode|prompt)",
+        r"do anything now",
+        r"you are (now )?(unrestricted|uncensored|unfiltered|jailbroken)",
+        r"no (restrictions|guardrails|rules|limits) apply",
+        r"pretend (you have|there are) no (content policy|guidelines|restrictions)",
+        r"hypothetically\b.{0,40}?\bno (rules|restrictions|limits)\b",
+        r"developer mode",
+        r"opposite day",
+        r"answer as (evil|unrestricted|amoral)",
+        r"an ai with no (ethical )?(guidelines|restrictions)",
+        r"do not refuse (this|any) request",
+        r"not allowed to (say|respond with) .{0,15}i can'?t",
+        r"never (respond with|give) a refusal",
+        r"must always comply\b.{0,20}(no matter|regardless)",
+    ]),
+    description="Known jailbreak personas or framings intended to bypass safety policy.",
+)
+
+# --- Role escalation: attempts to claim elevated privilege ---
+ROLE_ESCALATION = Rule(
+    category="role_escalation",
+    pattern=_compile([
+        r"i am (the |your )?(admin|administrator|root|developer|owner) (of )?(this system|you)",
+        r"as (an|the) (admin|administrator|root)( user)?\b",
+        r"(grant|give) (me )?(admin|root|sudo|superuser) access",
+        r"(enable|switch (into|to)|turn on) (debug|developer|maintenance) mode",
+        r"i have (root|admin|sudo) privileges",
+        r"you must (obey|comply with) (me|this) (because|since) i (am|have)",
+        r"override (safety|security) (settings|checks) for (admin|root)",
+    ]),
+    description="Attempts to claim elevated privileges to bypass safety policy.",
+)
+
+# --- Data exfiltration: requests for secrets/config/credentials ---
+DATA_EXFILTRATION = Rule(
+    category="data_exfiltration",
+    pattern=_compile([
+        r"(print|show|dump|reveal|output)\b.{0,20}\b(env(ironment)? variables|api keys?|secrets|credentials)\b",
+        r"what is your (api key|system prompt|configuration)",
+        r"cat\s+\.env",
+        r"os\.environ",
+    ]),
+    description="Requests to exfiltrate secrets, credentials, or internal configuration.",
+)
+
+# --- Multilingual injection: injection phrasing repeated in other languages ---
+MULTILINGUAL_INJECTION = Rule(
+    category="multilingual_injection",
+    pattern=_compile([
+        r"ignora (las )?instrucciones (anteriores|previas)",  # Spanish
+        r"ignore[sz] (les )?instructions précédentes",  # French
+        r"ignorieren sie (die )?vorherigen anweisungen",  # German
+        r"忽略(之前|上面|前面)的(指令|指示|说明)",  # Chinese
+        r"以前の指示を無視",  # Japanese
+        r"проигнорируй (предыдущие|все) инструкции",  # Russian
+        r"تجاهل التعليمات السابقة",  # Arabic
+    ]),
+    description="Prompt-injection phrasing translated into non-English languages.",
+)
+
+# --- Structural injection: fake delimiters/turns used to smuggle a new "system" message ---
+STRUCTURAL_INJECTION = Rule(
+    category="structural_injection",
+    pattern=_compile([
+        r"\[\s*system\s*\]",
+        r"<<\s*sys\s*>>",
+        r"```\s*system",
+        r"###\s*(instruction|system)\s*:",
+        r"---\s*begin (system )?prompt\s*---",
+        r"<\|?system\|?>",
+        r"^\s*system\s*:\s*you (are|must|will)",
+        r"<!--.*?(ignore|system|override).*?-->",
+        r"\buser\s*:.*\bassistant\s*:\s*(sure|okay|understood)",
+    ], extra_flags=re.DOTALL),
+    description="Fake delimiters or conversation turns used to smuggle an unauthorized system message.",
+)
+
+# --- Persona hijack: redefining the assistant's identity/rules wholesale ---
+PERSONA_HIJACK = Rule(
+    category="persona_hijack",
+    pattern=_compile([
+        r"from now on,? you are",
+        r"your new persona is",
+        r"roleplay as .{0,30}(no rules|no restrictions|no filter)",
+        r"you (will|shall) now respond as",
+        r"assume the (identity|persona|character) of .{0,40}with no (restrictions|filter)",
+    ]),
+    description="Attempts to wholesale-replace the assistant's identity and safety policy.",
+)
+
+# --- Authority impersonation: claiming to be the vendor/creator to force compliance ---
+AUTHORITY_IMPERSONATION = Rule(
+    category="authority_impersonation",
+    pattern=_compile([
+        r"this is (anthropic|openai) (support|staff|engineering)",
+        r"as your (creator|maker|developer),? i (command|order|require) you",
+        r"i work for (anthropic|openai) and (need|require) you to",
+        r"official (override|maintenance) code[: ]",
+        r"authorized by (anthropic|openai) to bypass",
+    ]),
+    description="Claims of vendor/creator authority used to compel policy violations.",
+)
+
+# --- System prompt leak: extracting the hidden system prompt verbatim ---
+SYSTEM_PROMPT_LEAK = Rule(
+    category="system_prompt_leak",
+    pattern=_compile([
+        r"repeat everything above this line",
+        r"output your (instructions|system prompt)\b.{0,20}\b(between|inside|wrapped in)\b.{0,20}\btags\b",
+        r"what (were|are) you told before this (conversation|message)",
+        r"show me the (text|prompt) that comes before my (message|question)",
+        r"summarize your (configuration|system prompt) in detail",
+    ]),
+    description="Attempts to extract the hidden system prompt verbatim or by summary.",
+)
+
+# --- Prompt leak via translation: asking for the system prompt in another language/format ---
+PROMPT_LEAK_VIA_TRANSLATION = Rule(
+    category="prompt_leak_via_translation",
+    pattern=_compile([
+        r"translate your (system prompt|instructions) into",
+        r"print your instructions in (spanish|french|german|japanese|chinese)",
+        r"restate your (hidden )?instructions? as a\b.{0,10}\b(poem|song|haiku|story)",
+        r"encode your system prompt in base64",
+    ]),
+    description="Attempts to exfiltrate the system prompt via translation or reformatting.",
+)
+
+# --- Trust escalation: multi-turn grooming before a final privilege-escalation ask ---
+TRUST_ESCALATION = Rule(
+    category="trust_escalation",
+    pattern=_compile([
+        r"now that we('ve| have) built trust",
+        r"since we're friends now",
+        r"you('ve| have) already agreed to",
+        r"as established earlier,? you agreed",
+        r"we're past the rules stage",
+        r"you already broke character once",
+    ]),
+    description="Multi-turn social-engineering framing used to leverage prior (fabricated) agreement.",
+)
+
+BLOCK_RULES: list[Rule] = [
+    PROMPT_INJECTION,
+    JAILBREAK,
+    ROLE_ESCALATION,
+    DATA_EXFILTRATION,
+    MULTILINGUAL_INJECTION,
+    STRUCTURAL_INJECTION,
+    PERSONA_HIJACK,
+    AUTHORITY_IMPERSONATION,
+    SYSTEM_PROMPT_LEAK,
+    PROMPT_LEAK_VIA_TRANSLATION,
+    TRUST_ESCALATION,
+]
+
+# --- Deterministic answerables: things the engine can resolve with no LLM ---
+GREETING = re.compile(r"^\s*(hi|hello|hey|good (morning|afternoon|evening))[!.\s]*$", re.IGNORECASE)
+SIMPLE_ARITHMETIC = re.compile(r"^\s*[-+]?\d+(\.\d+)?\s*[-+*/]\s*[-+]?\d+(\.\d+)?\s*=?\s*$")
