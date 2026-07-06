@@ -23,6 +23,9 @@ zero-inference gate in front of the model:
   arithmetic) with no model call at all.
 - **Defers** everything else to an LLM backend, so the gate never becomes a
   bottleneck for legitimate requests it can't confidently classify.
+- **Scans the model's output** on the way back, withholding responses that
+  leak credentials or the system prompt — so the harness guards both the
+  request *and* the reply, not just the input.
 
 ## Quickstart
 

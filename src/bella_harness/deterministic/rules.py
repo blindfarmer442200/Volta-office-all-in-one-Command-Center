@@ -100,16 +100,23 @@ ROLE_ESCALATION = Rule(
     severity=SEVERITY_CRITICAL,
 )
 
-# --- Data exfiltration: requests for secrets/config/credentials ---
+# --- Data exfiltration: requests for the ASSISTANT'S secrets/config/credentials ---
+# Tightened to require a "self/system" target so benign developer questions
+# ("how do I read os.environ in Python", "print environment variables in bash")
+# are not blocked, while requests aimed at the assistant's own secrets are.
 DATA_EXFILTRATION = Rule(
     category="data_exfiltration",
     pattern=_compile([
-        r"(print|show|dump|reveal|output)\b.{0,20}\b(env(ironment)? variables|api keys?|secrets|credentials)\b",
-        r"what is your (api key|system prompt|configuration)",
-        r"cat\s+\.env",
-        r"os\.environ",
+        # Note: extraction of the *system prompt/configuration itself* is owned
+        # by the SYSTEM_PROMPT_LEAK rule; this rule targets secrets/credentials.
+        r"(your|this (system|assistant|model)'?s?)\b.{0,12}\b(api keys?|secrets?|credentials?)\b",
+        r"what('?s| is) your (api key|secret)\b",
+        r"(print|show|dump|reveal|list|output|give|send|tell)\b.{0,50}\b(api keys?|secrets?|credentials?)\b.{0,35}\b(you|your|currently|loaded|configur\w*|access|this system|stored|used to)\b",
+        r"(print|show|dump|reveal|list|output)\b.{0,40}\benv(ironment)? variables?\b.{0,25}\b(you|your|access|loaded|configur\w*|this system)\b",
+        r"os\.environ\b.{0,40}\b(you|your|configur\w*|secret|api key|this system)\b",
+        r"cat\s+\.env\b",
     ]),
-    description="Requests to exfiltrate secrets, credentials, or internal configuration.",
+    description="Requests to exfiltrate the assistant's secrets, credentials, or internal configuration.",
     severity=SEVERITY_CRITICAL,
 )
 
@@ -229,6 +236,35 @@ BLOCK_RULES: list[Rule] = [
     SYSTEM_PROMPT_LEAK,
     PROMPT_LEAK_VIA_TRANSLATION,
     TRUST_ESCALATION,
+]
+
+# ---------------------------------------------------------------------------
+# Output rules: applied to the MODEL'S RESPONSE, not the user's input.
+#
+# These deterministically catch concrete leakage in a generated answer -- a
+# credential/secret the model surfaced, or (via a configured canary) the system
+# prompt itself. They complement, not replace, the model's own alignment: they
+# catch specific exfiltration, not "harmful content" in general.
+# ---------------------------------------------------------------------------
+
+SECRET_IN_OUTPUT = Rule(
+    category="secret_in_output",
+    pattern=_compile([
+        r"sk-[A-Za-z0-9]{20,}",                       # OpenAI-style secret key
+        r"\bAKIA[0-9A-Z]{16}\b",                      # AWS access key id
+        r"\bASIA[0-9A-Z]{16}\b",                      # AWS temporary access key id
+        r"\bghp_[A-Za-z0-9]{20,}\b",                  # GitHub personal access token
+        r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",          # GitHub fine-grained PAT
+        r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",          # Slack token
+        r"\bAIza[0-9A-Za-z\-_]{35}\b",                # Google API key
+        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",  # private key block
+    ]),
+    description="Model response contains something that looks like a leaked credential or private key.",
+    severity=SEVERITY_CRITICAL,
+)
+
+OUTPUT_BLOCK_RULES: list[Rule] = [
+    SECRET_IN_OUTPUT,
 ]
 
 # --- Deterministic answerables: things the engine can resolve with no LLM ---

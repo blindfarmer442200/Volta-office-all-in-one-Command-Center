@@ -14,7 +14,9 @@ DeterministicEngine.evaluate()
      │
      └─ DEFER_TO_LLM ───────► BackendAbstraction.generate()
                                     │
-                                    ├─ backend succeeds ─► response returned
+                                    ├─ backend succeeds ─► scan_output()
+                                    │        ├─ clean  → response returned
+                                    │        └─ leak   → BLOCK (response withheld)
                                     │
                                     └─ all backends fail ─► fail_closed:
                                          true  → BLOCK (safe refusal)
@@ -24,6 +26,16 @@ DeterministicEngine.evaluate()
 `BellaHarness` (`src/bella_harness/harness.py`) is the only entry point
 orchestrating this. It never calls a backend unless the deterministic engine
 defers.
+
+## Output scanning
+
+The harness guards the reply as well as the request. When a deferred request
+comes back from a backend, `DeterministicEngine.scan_output()` re-checks the
+response and the harness withholds it (returning a safe message) if it contains
+a leaked credential/private key or the configured system-prompt canary. This is
+deliberately narrow — concrete exfiltration, not a general "is this harmful"
+judgement, which remains the model's own alignment job. Controlled by
+`harness.output_scanning` in config (`enabled`, `canary`); on by default.
 
 ## DeterministicEngine
 
