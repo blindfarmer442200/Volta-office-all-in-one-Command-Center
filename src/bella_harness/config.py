@@ -9,6 +9,7 @@ named by a backend's ``api_key_env`` setting.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,22 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" /
 ENV_PREFIX = "BELLA"
 ENV_NEST_SEP = "__"
 
-# Config keys that must never hold a literal secret. Presence of these keys
-# with a non-null scalar value in a YAML file is a hard error.
-_FORBIDDEN_LITERAL_SECRET_KEYS = {"api_key", "apikey", "secret", "token"}
+# A config key whose name matches this (e.g. api_key, apikey, client_secret,
+# access_token, password) must never hold a literal secret value. The check is
+# substring-based so differently-named secrets are caught too.
+_SECRET_KEY_RE = re.compile(r"(api_?key|secret|token|password|passwd|credential)", re.IGNORECASE)
+
+
+def _is_secret_bearing_key(key: str) -> bool:
+    """True if this key name should hold a secret (and therefore must not, in a file).
+
+    Keys ending in ``_env`` are exempt: they hold the *name* of an environment
+    variable (e.g. api_key_env: OPENAI_API_KEY), not the secret itself.
+    """
+    name = str(key).lower()
+    if name.endswith("_env"):
+        return False
+    return bool(_SECRET_KEY_RE.search(name))
 
 
 class ConfigError(ValueError):
@@ -32,7 +46,7 @@ def _reject_literal_secrets(node: Any, path: str = "") -> None:
     if isinstance(node, dict):
         for key, value in node.items():
             key_path = f"{path}.{key}" if path else str(key)
-            if str(key).lower() in _FORBIDDEN_LITERAL_SECRET_KEYS and value:
+            if _is_secret_bearing_key(key) and value:
                 raise ConfigError(
                     f"Config key '{key_path}' looks like a literal secret. "
                     "API keys and other secrets must be supplied via environment "

@@ -1,15 +1,23 @@
 """The deterministic engine: resolves or blocks requests without an LLM call.
 
-Pipeline for every incoming request:
+Input pipeline (`evaluate`) for every incoming request:
 
-1. Decode any obviously-encoded payload (base64 / hex / rot13) and scan the
-   decoded text too, so an attacker can't dodge the block rules just by
-   wrapping an attack in an encoding layer.
-2. Match against BLOCK_RULES (prompt injection, jailbreak, role escalation,
-   data exfiltration, multilingual injection). Any match => BLOCK.
+1. Normalize and de-obfuscate: NFKC, zero-width stripping, confusable-homoglyph
+   folding, leetspeak, letter-spacing/word-fragment collapse, formatting
+   stripping, and base64/hex/rot13 payload decoding -- then scan every variant,
+   so an attacker can't dodge the rules by wrapping an attack in an encoding or
+   obfuscation layer.
+2. Match against BLOCK_RULES (all families in rules.BLOCK_RULES: prompt
+   injection, jailbreak, role escalation, data exfiltration, multilingual
+   injection, structural injection, persona hijack, authority impersonation,
+   system-prompt leak, prompt-leak-via-translation, trust escalation). Any
+   match => BLOCK.
 3. Match against known deterministic-answerable shapes (greeting, simple
    arithmetic). Any match => ALLOW_DETERMINISTIC with a computed answer.
 4. Otherwise => DEFER_TO_LLM, handed off to a backend via BackendAbstraction.
+
+Output pipeline (`scan_output`) re-checks a model's response for leaked
+credentials or system-prompt content before it is returned to the user.
 """
 
 from __future__ import annotations
@@ -22,7 +30,12 @@ import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 
-from bella_harness.deterministic.rules import BLOCK_RULES, GREETING, SIMPLE_ARITHMETIC
+from bella_harness.deterministic.rules import (
+    BLOCK_RULES,
+    GREETING,
+    OUTPUT_BLOCK_RULES,
+    SIMPLE_ARITHMETIC,
+)
 
 
 class Action(str, Enum):
@@ -45,6 +58,7 @@ ZERO_WIDTH_CHARS = ("​", "‌", "‍", "﻿", "⁠")
 _LEET_MAP = str.maketrans({"4": "a", "3": "e", "1": "i", "0": "o", "5": "s", "7": "t", "@": "a", "$": "s"})
 _LETTER_SPACING_RE = re.compile(r"\b(?:[A-Za-z][ ._-]){3,}[A-Za-z]\b")
 _WORD_FRAGMENT_HYPHEN_RE = re.compile(r"(?<=[A-Za-z])[-_](?=[A-Za-z])")
+_SEPARATOR_RUN_RE = re.compile(r"[ _-]+")
 _FORMATTING_CHARS_RE = re.compile(r"[*_`~]")
 # Cyrillic letters that are visually indistinguishable from Latin lookalikes,
 # commonly used for homoglyph obfuscation (NFKC does not fold across scripts).
@@ -78,6 +92,17 @@ def _collapse_letter_spacing(text: str) -> str:
 def _collapse_word_fragments(text: str) -> str:
     """Join hyphen/underscore-split word fragments, e.g. "ig-nore" -> "ignore"."""
     return _WORD_FRAGMENT_HYPHEN_RE.sub("", text)
+
+
+def _separators_to_spaces(text: str) -> str:
+    """Turn runs of space/underscore/hyphen into single spaces.
+
+    Complements _collapse_word_fragments: when a separator was standing in for a
+    space ("ignore_all_previous" or "ignore-all-previous"), collapsing it to
+    nothing would fuse the words, so we also scan a variant where separators
+    become spaces.
+    """
+    return _SEPARATOR_RUN_RE.sub(" ", text)
 
 
 def _strip_formatting_chars(text: str) -> str:
@@ -163,6 +188,20 @@ class DeterministicEngine:
         decoded_layers = _try_decode_layers(normalized)
 
         confusables_normalized = _normalize_confusables(normalized)
+        # A single variant with every normalization composed, so attacks that
+        # stack multiple obfuscation layers at once (e.g. Cyrillic homoglyphs +
+        # markdown emphasis + hyphen splitting) are still caught. The individual
+        # variants above are kept because composing can occasionally over-fold
+        # benign text; scanning both maximizes recall.
+        leet_confusable = _normalize_leetspeak(confusables_normalized)
+        fully_normalized = _strip_formatting_chars(
+            _collapse_word_fragments(
+                _collapse_letter_spacing(leet_confusable)
+            )
+        )
+        # Same stack, but with separators treated as spaces rather than removed,
+        # so separator-as-space obfuscation ("1gn0re_all_prev10us") is caught.
+        separators_spaced = _strip_formatting_chars(_separators_to_spaces(leet_confusable))
         texts_to_scan = [
             normalized,
             confusables_normalized,
@@ -172,6 +211,8 @@ class DeterministicEngine:
             _collapse_letter_spacing(_normalize_leetspeak(normalized)),
             _collapse_word_fragments(normalized),
             _strip_formatting_chars(normalized),
+            fully_normalized,
+            separators_spaced,
             *decoded_layers,
         ]
 
@@ -206,6 +247,42 @@ class DeterministicEngine:
                 )
 
         return Decision(action=Action.DEFER_TO_LLM, decoded_layers=decoded_layers)
+
+    def scan_output(self, response_text: str, canary: str | None = None) -> Decision | None:
+        """Scan a model's RESPONSE for concrete leakage before it reaches the user.
+
+        Returns a BLOCK Decision if the output should be withheld, or None if the
+        output is clean and may pass through. This is the output half of the
+        harness: it catches leaked credentials and (if a canary is configured)
+        verbatim system-prompt leakage. It does not attempt to judge "harmful
+        content" in general -- that remains the model's own alignment job.
+        """
+        if not response_text:
+            return None
+
+        normalized = _normalize(response_text)
+
+        if canary:
+            # Compare against the fully-decoded/normalized text so a canary that
+            # is lightly obfuscated in the leak is still caught.
+            if canary in response_text or canary in normalized:
+                return Decision(
+                    action=Action.BLOCK,
+                    category="system_prompt_leak_in_output",
+                    reason="Model response contains the configured system-prompt canary.",
+                    severity="critical",
+                )
+
+        for rule in OUTPUT_BLOCK_RULES:
+            if rule.pattern.search(response_text) or rule.pattern.search(normalized):
+                return Decision(
+                    action=Action.BLOCK,
+                    category=rule.category,
+                    reason=rule.description,
+                    severity=rule.severity,
+                )
+
+        return None
 
     @staticmethod
     def _eval_arithmetic(expr: str) -> float | int | None:

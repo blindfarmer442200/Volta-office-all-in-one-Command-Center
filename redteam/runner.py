@@ -56,6 +56,21 @@ class SuiteResult:
                 counts[r.severity] = counts.get(r.severity, 0) + 1
         return counts
 
+    def deterministic_resolution_rate(self) -> float:
+        """Share of probes the engine resolved with no LLM (block or direct answer).
+
+        Measured over the adversarial probe suite -- not representative of real
+        production traffic, but a concrete, reproducible number instead of an
+        asserted one.
+        """
+        if not self.results:
+            return 0.0
+        resolved = sum(
+            1 for r in self.results
+            if r.actual_action in ("block", "allow_deterministic")
+        )
+        return round(resolved / len(self.results), 4)
+
     def to_dict(self) -> dict:
         return {
             "total": self.total,
@@ -65,6 +80,7 @@ class SuiteResult:
             "agents_covered": self.agents_covered,
             "clean": self.clean,
             "severity_breakdown": self.severity_breakdown(),
+            "deterministic_resolution_rate": self.deterministic_resolution_rate(),
             "results": [asdict(r) for r in self.results],
         }
 

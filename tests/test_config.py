@@ -26,11 +26,15 @@ def test_rejects_literal_api_key_in_config(tmp_path):
 @pytest.mark.parametrize(
     "yaml_body",
     [
-        "backends:\n  openai:\n    api_key: sk-xxx\n",          # api_key
-        "backends:\n  openai:\n    apikey: sk-xxx\n",           # apikey
-        "backends:\n  openai:\n    secret: hunter2\n",          # secret
-        "backends:\n  openai:\n    token: abc123\n",            # token
-        "harness:\n  nested:\n    deeply:\n      secret: x\n",  # deeply nested
+        "backends:\n  openai:\n    api_key: sk-xxx\n",              # api_key
+        "backends:\n  openai:\n    apikey: sk-xxx\n",               # apikey
+        "backends:\n  openai:\n    secret: hunter2\n",              # secret
+        "backends:\n  openai:\n    token: abc123\n",                # token
+        "harness:\n  nested:\n    deeply:\n      secret: x\n",      # deeply nested
+        "backends:\n  oauth:\n    client_secret: shhh\n",           # client_secret (substring)
+        "backends:\n  oauth:\n    access_token: abc123\n",          # access_token (substring)
+        "backends:\n  db:\n    password: hunter2\n",                # password
+        "services:\n  x:\n    api_credential: nope\n",              # credential (substring)
     ],
 )
 def test_rejects_literal_secret_variants(tmp_path, yaml_body):
@@ -49,6 +53,15 @@ def test_allows_api_key_env_reference(tmp_path):
     )
     config = load_config(ok_config)
     assert config["backends"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
+
+
+@pytest.mark.parametrize("env_key", ["api_key_env", "token_env", "secret_env"])
+def test_allows_secretlike_env_indirection_keys(tmp_path, env_key):
+    # Any *_env key holds an env var NAME, not a secret, and must be allowed.
+    ok_config = tmp_path / "ok.yaml"
+    ok_config.write_text(f"backends:\n  x:\n    {env_key}: SOME_ENV_VAR_NAME\n")
+    config = load_config(ok_config)
+    assert config["backends"]["x"][env_key] == "SOME_ENV_VAR_NAME"
 
 
 def test_rejects_secret_injected_via_env_override(tmp_path, monkeypatch):

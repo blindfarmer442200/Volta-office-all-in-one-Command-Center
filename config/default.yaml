@@ -13,6 +13,13 @@ harness:
   # Backend used when the deterministic engine defers to an LLM.
   default_backend: ollama
   fail_closed: true
+  # Output half of the harness: re-scan the model's response before returning
+  # it. Blocks responses that leak credentials or the system prompt.
+  output_scanning:
+    enabled: true
+    # Optional sentinel string placed in your system prompt. If it ever shows
+    # up in a model response, the system prompt leaked and the reply is blocked.
+    canary: null
 
 deterministic:
   rules_file: null # null = use built-in rules in deterministic/rules.py
