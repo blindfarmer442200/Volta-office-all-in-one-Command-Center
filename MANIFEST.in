@@ -1,10 +1,13 @@
+include .dockerignore
 include ARCHITECTURE.md
 include CHANGELOG.md
 include CLAUDE.md
 include CONTRIBUTING.md
+include Dockerfile
 include LICENSE
 include README.md
 include SECURITY.md
+include compose.service.yml
 include requirements.txt
 recursive-include config *.yaml
 recursive-include docs *.md
