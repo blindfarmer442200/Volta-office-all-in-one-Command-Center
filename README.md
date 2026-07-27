@@ -1,28 +1,69 @@
 # bella-harness
 
-A deterministic-first agent safety harness. A rule-based gate classifies every
-request *before* any LLM is involved—blocking known attack patterns, answering
-trivial requests directly, and deferring legitimate requests to an approved
-backend.
+A deterministic-first safety and memory harness for Bella AI. Rule-based code
+classifies every request before any model is involved, governs which memories
+may be recalled, applies Bella's identity and consequence policy, controls model
+routing, scans output, and keeps real-world actions disabled.
 
-Red-team score: **115/115 clean** across 39 specialist attack categories, with
-zero breaches and zero false positives in CI.
+Current deterministic red-team baseline: **115/115 clean** across 39 specialist
+attack categories, with zero breaches and zero false positives.
 
-## What Bella protects
+## Current production scope
 
-- Blocks known attack patterns before memory or model access.
-- Answers greetings and arithmetic without a model call.
-- Recalls approved Mind Trace memory only after the deterministic gate defers.
-- Applies Bella identity, mode, risk, accessibility, and approval rules outside
-  model weights.
-- Separates plans from actions through an exact, expiring, one-use Action Gate.
-- Keeps the Action Gate limited to a local side-effect-free mock sandbox.
-- Rejects candidate models unless all 18 Bella behavior scenarios pass.
-- Learns only from explicit human review and versioned corrections.
-- Redacts tuning exports by default and never uploads or trains automatically.
-- Scans model output before returning it to the user.
-- Restricts Ollama to localhost or literal private-network addresses.
-- Builds and smoke-tests an installable wheel in CI.
+Bella Harness `0.2.x` is production-scoped for:
+
+- deterministic input and output gates;
+- governed read-only Mind Trace memory;
+- Bella Operator identity, modes, risk, plans, and approval metadata;
+- private/local Ollama generation;
+- all-or-nothing local-model evaluation;
+- explicit human correction and privacy-first tuning export;
+- exact Action Gate preview and authorization in a side-effect-free mock sandbox;
+- installable wheel, production doctor, dependency audit, checksums, and release
+  manifest.
+
+It is **not** production-ready for real email, calendar, payment, account, file,
+smart-home, or device-control execution. Those connectors are intentionally not
+implemented.
+
+## Safety model
+
+```text
+request
+  |
+  v
+deterministic input gate
+  |-- blocked ----------------------> refusal
+  |-- direct -----------------------> deterministic answer
+  `-- deferred
+        |
+        v
+      Bella Operator
+        |
+        v
+      approved Mind Trace recall
+        |
+        v
+      privacy-aware backend routing
+        |
+        v
+      model response
+        |
+        v
+      deterministic output scan
+```
+
+Key guarantees:
+
+- Blocked requests never reach memory or a model.
+- Memory is evidence, never instructions or authority.
+- Plans and approval metadata are not action capabilities.
+- Ordinary model responses cannot execute anything.
+- Ollama is restricted to localhost or literal private addresses.
+- An Ollama outage cannot silently route prompts or memory to cloud.
+- A candidate model must pass all 18 Bella behavior scenarios.
+- Normal conversations are not automatically captured for tuning.
+- Tuning export is redacted by default and never uploads or trains itself.
 
 ## Install
 
@@ -41,27 +82,28 @@ Windows PowerShell:
 .venv\Scripts\Activate.ps1
 ```
 
-Run the production doctor before using a model:
+Run the production checks:
 
 ```bash
 bella doctor
 bella doctor --live
 ```
 
-The offline doctor verifies policy, package data, configured stores, and the
-private Ollama endpoint. `--live` adds a prompt-free Ollama health check.
+The offline doctor checks policy, packaged configuration, store integrity,
+backend settings, and private Ollama routing. `--live` adds a prompt-free Ollama
+health check.
 
 ## Quickstart
 
 ```bash
-# Deterministic responses—no backend required
+# No model required
 bella ask "hello"
 bella ask "2 + 2"
 
-# Free-form request through configured Ollama
+# Free-form response through configured Ollama
 bella ask --mode business --json "Draft an email to the customer"
 
-# Exact mock action preview—never creates an external side effect
+# Local mock action preview only
 bella sandbox-action \
   "Send an email to the customer" \
   --kind send_message \
@@ -69,12 +111,12 @@ bella sandbox-action \
   --payload '{"subject":"Invoice","body":"Invoice 1042 is overdue."}' \
   --mode business
 
-# Evaluate one exact local model. Any failure rejects it.
+# Candidate model must pass 18/18
 bella evaluate-bella \
   --model qwen3.5 \
   --report bella-evaluation-report.json
 
-# Explicitly record a human correction. Normal chats are never auto-captured.
+# Explicit human correction; ordinary chats are never auto-captured
 bella review-response \
   --db bella-tuning.sqlite3 \
   --interaction-id invoice-answer-001 \
@@ -91,181 +133,164 @@ bella export-tuning \
   --db bella-tuning.sqlite3 \
   --output-dir bella-dataset
 
-# Offline deterministic attack suite
 bella redteam
 ```
 
-Source-tree commands remain available through:
+Source-tree execution:
 
 ```bash
 PYTHONPATH=src python -m bella_harness <command>
 ```
 
-## Production scope
+## Mind Trace
 
-Version `0.2.x` is production-scoped for:
+Mind Trace is reached only after the deterministic gate defers a request.
 
-- deterministic input and output gates;
-- read-only governed memory;
-- Bella Operator policy;
-- local/private Ollama generation;
-- model evaluation;
-- explicit correction and dataset export;
-- mock-only Action Gate authorization.
-
-It is **not** production-ready for real email, calendar, payment, account, file,
-smart-home, or device-control execution. Those connectors are intentionally not
-implemented.
-
-See [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) before deploying.
-
-## Mind Trace memory
-
-Mind Trace is the bounded, human-governed memory seam inside the harness. It is
-reached only after the deterministic input gate returns `DEFER_TO_LLM`.
-Blocked requests and direct deterministic answers never read memory.
-
-- Only approved, current, non-superseded records can reach a model.
+- Only approved, current, non-superseded records may reach a model.
 - Private records are excluded in Customer mode.
-- Instruction-like memory is rejected by the deterministic gate.
-- Memory is labeled as untrusted JSON data, never instructions.
-- Memory cannot authorize external actions.
+- Instruction-like stored text is screened.
+- Context is bounded and labeled as untrusted data.
 - Malformed configured stores fail closed by default.
-- Irrelevant or empty recall leaves the original request unchanged.
+- Memory cannot approve, write, delete, or execute.
 
 See [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md).
 
 ## Bella Operator
 
-Bella Operator provides:
+The operator layer keeps Bella outside model weights:
 
 - fixed `bella-core-v1` identity;
 - Default, Life, Home, Business, Technical, Care, Developer, Customer, and Quiet
   modes;
-- deterministic Low, Medium, High, and Critical consequence classification;
-- visible plans for consequential requests;
-- current approval requirements for High and Critical requests;
-- accessibility and uncertainty rules;
-- a hard rule that plans and memories are not execution authority;
-- a hard rule that completed-action claims require verified tool results.
+- Low, Medium, High, and Critical consequence classification;
+- visible non-executing plans;
+- current approval requirements;
+- accessibility and uncertainty directives;
+- false-completion prevention.
 
-Operator metadata is returned by `bella ask --json`. See
-[docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md).
+See [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md).
 
-## Bella Action Gate
+## Action Gate
 
-Action Gate binds an exact connector, kind, target, and JSON payload to a
-SHA-256 fingerprint, then requires explicit confirmation before issuing a
+Action Gate binds an exact mock connector, kind, target, and JSON payload to a
+SHA-256 fingerprint. It requires explicit confirmation before issuing a
 short-lived one-use capability.
 
-Current guarantees:
-
-- only `mock_action_sandbox` is accepted;
-- previews expire in at most 15 minutes;
-- authorizations expire in at most 5 minutes;
-- only a capability hash is retained;
-- changed payloads and replayed capabilities fail closed;
-- High requests cannot authorize Critical action kinds;
-- audit events are hash chained;
-- successful execution always records `simulated=true` and
+- `mock_action_sandbox` only;
+- preview lifetime at most 15 minutes;
+- authorization lifetime at most 5 minutes;
+- only capability hashes retained;
+- mutation, wrong capability, expiration, and replay fail closed;
+- successful execution always reports `simulated=true` and
   `sideEffectsPerformed=false`.
 
 See [docs/ACTION_GATE.md](docs/ACTION_GATE.md).
 
-## Bella Evaluation Gate
+## Evaluation Gate
 
-The Evaluation Gate tests one exact local Ollama model against 18 mandatory
-synthetic behavior scenarios covering:
+One exact Ollama model is tested against 18 mandatory synthetic scenarios for:
 
 - personal support without business drift;
-- missing-memory honesty and unreviewed information;
+- missing-memory honesty;
 - Customer-mode privacy;
-- destructive actions, money, calendar, credentials, and files;
-- medication changes;
+- destructive, money, calendar, credential, and file requests;
+- medication boundaries;
 - Quiet-mode brevity;
 - stored prompt-injection resistance;
 - unsolicited faith language;
-- accessibility for low vision and voice use;
-- remembered approval versus current permission;
+- low-vision and voice accessibility;
+- remembered preference versus current permission;
 - draft versus send and false-completion claims.
 
-The model must return strict JSON. The gate sends no personal memory or real
-credentials, has no cloud fallback, never activates a model automatically, and
-never grants permissions. A score of 17/18 still fails.
+Evaluation receives no personal memory, credentials, capabilities, or tools. It
+has no cloud fallback. A score of 17/18 fails.
 
 See [docs/BELLA_EVALUATION_GATE.md](docs/BELLA_EVALUATION_GATE.md).
 
-## Bella Correction and Tuning Loop
+## Correction and tuning
 
-The tuning loop is explicit and human controlled. Ordinary conversations are
-not silently added to a dataset.
+The local SQLite tuning store preserves immutable prompts/responses, append-only
+human feedback, exact versioned corrections, one active correction, content
+hashes, and a hash-chained audit.
 
-The SQLite store preserves:
+Redacted export creates:
 
-- immutable prompts and original responses with SHA-256 values;
-- append-only human feedback;
-- exact human replacement answers;
-- correction version history with one active replacement;
-- a hash-chained audit trail;
-- export audit events.
+```text
+sft.jsonl
+preference.jsonl
+evaluation-only.jsonl
+regression.jsonl
+manifest.json
+```
 
-Redacted export separates reviewed data into:
-
-- `sft.jsonl`;
-- `preference.jsonl`;
-- `evaluation-only.jsonl`;
-- `regression.jsonl`;
-- `manifest.json`.
-
-The loop never stores hidden Mind Trace packets, connector credentials, or
-Action Gate capabilities. It never uploads, trains, or activates a model. Exact
-unredacted export requires `export-tuning --exact`.
+Hidden Mind Trace packets, connector credentials, and Action Gate capabilities
+are not accepted. Exact unredacted export requires `--exact` and still remains
+local.
 
 See [docs/BELLA_TUNING_LOOP.md](docs/BELLA_TUNING_LOOP.md).
 
-## Ollama transport
+## Model routing and cloud egress
 
-The Ollama adapter accepts `localhost` or a literal private/loopback IP address.
-It rejects public IPs, arbitrary DNS names, embedded credentials, URL prefixes,
-queries, fragments, redirects, malformed JSON, invalid UTF-8, and oversized
-prompts or responses.
+Default routing is local:
 
-Use a private IP or VPN address for a trusted Ollama host. Do not expose Ollama
-directly to the public internet.
+```yaml
+harness:
+  default_backend: ollama
+  allow_cloud_fallback: false
+```
 
-## Backends
+Merely enabling OpenAI, Anthropic, or OpenRouter does not authorize automatic
+fallback. Local-to-cloud fallback requires `allow_cloud_fallback: true` and an
+enabled provider. A cloud provider selected as the default or explicitly pinned
+by a library caller is an explicit cloud route.
 
-| Backend | Default model | Default state |
-|---|---|---|
-| Ollama | `qwen3.5` | Enabled, local/private only |
-| OpenAI | `gpt-4o-mini` | Disabled |
-| Anthropic | `claude-3-5-sonnet-latest` | Disabled |
-| OpenRouter | `meta-llama/llama-3.1-70b-instruct` | Disabled |
+See [docs/CLOUD_EGRESS.md](docs/CLOUD_EGRESS.md).
 
-API keys are read only from named environment variables. Literal secrets in
-configuration are rejected.
+## Release gates
 
-## Verification
+Every pull request runs on Python 3.10 and 3.12:
 
-Every PR runs:
-
-- Python 3.10 unit tests;
-- Python 3.12 unit tests;
+- source compilation;
+- dependency vulnerability audit;
+- unit tests with a release floor of 207;
 - all 115 deterministic red-team probes;
 - wheel and source-archive build;
-- clean wheel installation;
-- `pip check`;
-- installed deterministic command smoke test;
-- installed `bella doctor --json` smoke test.
+- `twine check`;
+- required source-archive content validation;
+- clean wheel installation and `pip check`;
+- installed deterministic command and production doctor;
+- SHA-256 checksums and commit-bound release manifest verification.
 
-Live Ollama and physical-device testing remain explicit deployment steps rather
-than simulated CI claims.
+A release tag must exactly match `v<project-version>`, point to a commit contained
+in `main`, and have an exact notes file under `docs/releases/`. Manual release
+workflow runs build evidence but do not publish.
+
+See [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
+
+## Deployment boundary
+
+A published package is not automatically ready for every host. The operator must
+still complete:
+
+```bash
+bella doctor
+bella doctor --live
+bella evaluate-bella --model <exact-model-tag> --report bella-evaluation-report.json
+```
+
+Final device, screen-reader, voice, load, long-running Ollama, network, and backup
+restoration tests remain deployment-specific.
+
+See [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md)
+- [CHANGELOG.md](CHANGELOG.md)
 - [SECURITY.md](SECURITY.md)
 - [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md)
+- [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)
+- [docs/CLOUD_EGRESS.md](docs/CLOUD_EGRESS.md)
 - [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md)
 - [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md)
 - [docs/ACTION_GATE.md](docs/ACTION_GATE.md)
@@ -273,3 +298,5 @@ than simulated CI claims.
 - [docs/BELLA_TUNING_LOOP.md](docs/BELLA_TUNING_LOOP.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [CLAUDE.md](CLAUDE.md)
+
+MIT licensed. See [LICENSE](LICENSE).

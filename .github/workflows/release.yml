@@ -1,28 +1,66 @@
-name: Red team
+name: Release
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
-  pull_request:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bella-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  redteam:
+  compatibility:
+    name: Compatibility Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: true
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+
+      - name: Compile source
+        run: python -m compileall -q src scripts
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Run deterministic red team
+        run: PYTHONPATH=src:. python -m bella_harness.cli redteam --report redteam-report.json
+
+  build-release:
+    name: Build verified release
+    needs: compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
       - name: Record project version and build timestamp
         shell: bash
@@ -33,13 +71,29 @@ jobs:
           echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
+      - name: Require a main-branch release commit
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor HEAD origin/main
+
+      - name: Require tag and project version match
+        if: github.ref_type == 'tag'
+        run: |
+          PYTHONPATH=src python scripts/build_release_manifest.py check-tag \
+            --tag "$GITHUB_REF_NAME" \
+            --pyproject pyproject.toml
+          test -f "docs/releases/$GITHUB_REF_NAME.md"
+
       - name: Compile source
         run: python -m compileall -q src scripts
 
       - name: Audit Python dependencies
         run: python -m pip_audit -r requirements.txt
 
-      - name: Run unit tests
+      - name: Run unit tests and record count
         shell: bash
         run: |
           set -o pipefail
@@ -48,29 +102,14 @@ jobs:
           test -n "$count"
           echo "PYTEST_COUNT=$count" >> "$GITHUB_ENV"
 
-      - name: Upload pytest output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-output-py${{ matrix.python-version }}
-          path: pytest-output.txt
-
-      - name: Run red-team probe suite
-        run: PYTHONPATH=src:. python -m bella_harness.cli redteam --report redteam-report.json
-
-      - name: Record red-team count
+      - name: Run red team and record count
         shell: bash
         run: |
+          set -euo pipefail
+          PYTHONPATH=src:. python -m bella_harness.cli redteam --report redteam-report.json
           count="$(python -c 'import json; print(json.load(open("redteam-report.json", encoding="utf-8"))["passed"])')"
           test -n "$count"
           echo "REDTEAM_COUNT=$count" >> "$GITHUB_ENV"
-
-      - name: Upload red-team report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: redteam-report-py${{ matrix.python-version }}
-          path: redteam-report.json
 
       - name: Build wheel and source archive
         run: python -m build
@@ -110,13 +149,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m venv .wheel-smoke
-          .wheel-smoke/bin/python -m pip install --upgrade pip
-          .wheel-smoke/bin/python -m pip install dist/*.whl
-          .wheel-smoke/bin/python -m pip check
-          .wheel-smoke/bin/bella ask "hello" | grep -q "Hello"
-          .wheel-smoke/bin/bella doctor --json > bella-doctor.json
-          .wheel-smoke/bin/python - <<'PY'
+          python -m venv .release-smoke
+          .release-smoke/bin/python -m pip install --upgrade pip
+          .release-smoke/bin/python -m pip install dist/*.whl
+          .release-smoke/bin/python -m pip check
+          .release-smoke/bin/bella ask "hello" | grep -q "Hello"
+          .release-smoke/bin/bella doctor --json > bella-doctor.json
+          .release-smoke/bin/python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -127,7 +166,7 @@ jobs:
           assert report["package_version"] == os.environ["PROJECT_VERSION"]
           PY
 
-      - name: Build and verify release manifest
+      - name: Build and verify release evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -147,13 +186,32 @@ jobs:
             --manifest release-manifest.json \
             --dist-dir dist
 
-      - name: Upload distributions and release evidence
-        if: always()
+      - name: Upload verified release evidence
         uses: actions/upload-artifact@v4
         with:
-          name: bella-package-py${{ matrix.python-version }}
+          name: bella-release-${{ github.ref_name }}
+          if-no-files-found: error
           path: |
             dist/*
+            pytest-output.txt
+            redteam-report.json
             bella-doctor.json
             SHA256SUMS
             release-manifest.json
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/* \
+            SHA256SUMS \
+            release-manifest.json \
+            redteam-report.json \
+            bella-doctor.json \
+            --verify-tag \
+            --title "Bella Harness $GITHUB_REF_NAME" \
+            --notes-file "docs/releases/$GITHUB_REF_NAME.md"

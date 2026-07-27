@@ -1,5 +1,10 @@
 # Architecture
 
+Bella Harness is deterministic-first. Models generate language, but deterministic
+code owns input blocking, memory eligibility, identity policy, consequence risk,
+action authorization, output scanning, evaluation, tuning history, network
+egress, and release acceptance.
+
 ## Response flow
 
 ```text
@@ -8,8 +13,8 @@ request text
      v
 DeterministicEngine.evaluate()
      |
-     |-- BLOCK --------------------------> refusal; operator, memory, LLM untouched
-     |-- ALLOW_DETERMINISTIC ------------> direct answer; operator, memory untouched
+     |-- BLOCK ----------------------> refusal; operator, memory, model untouched
+     |-- ALLOW_DETERMINISTIC --------> direct answer; operator, memory untouched
      `-- DEFER_TO_LLM
              |
              v
@@ -26,41 +31,78 @@ DeterministicEngine.evaluate()
          - unsafe memory excluded
              |
              v
-       Bella operator envelope
+       bella.operator.v1 envelope
          - fixed identity and mode rules
          - risk and approval metadata
-         - memory is not authority
+         - memory is evidence, not authority
          - plan is not execution
              |
              v
        BackendAbstraction.generate()
+         - default route first
+         - local-to-cloud fallback blocked unless explicitly enabled
              |
              v
        DeterministicEngine.scan_output()
 ```
 
 `BellaHarness.handle()` never executes actions and never writes tuning data. It
-returns a response plus visible memory and operator metadata. Saving a review is
-a separate explicit workflow.
+returns a response plus visible memory and operator metadata. Human review is a
+separate explicit workflow.
+
+## Cloud-egress boundary
+
+Bella supports Ollama, OpenAI, Anthropic, and OpenRouter, but enabling a cloud
+backend does not authorize automatic transmission.
+
+With the shipped configuration:
+
+```yaml
+harness:
+  default_backend: ollama
+  allow_cloud_fallback: false
+```
+
+an unpinned request uses eligible local backends only. If Ollama fails, the
+request fails closed rather than sending the full prompt or approved memory to a
+cloud provider.
+
+Automatic local-to-cloud fallback requires a second explicit consent setting:
+
+```yaml
+harness:
+  allow_cloud_fallback: true
+```
+
+A library caller may explicitly pin a specifically enabled cloud backend. A
+cloud backend configured as the default is also an explicit cloud route. Pinned
+backend failures do not cascade.
+
+Ollama itself accepts only `localhost` or a literal loopback/private IP address.
+Public IPs, arbitrary DNS hosts, embedded credentials, path prefixes, queries,
+fragments, redirects, malformed JSON, invalid UTF-8, and oversized prompts or
+responses fail closed.
+
+See `docs/CLOUD_EGRESS.md`.
 
 ## Action flow
 
-Consequential operations use a separate API:
+Consequential operations use a separate API from ordinary responses:
 
 ```text
 BellaHarness.prepare_action(request, exact ActionSpec)
      |
      v
 DeterministicEngine.evaluate()
-     |-- BLOCK --------------------------> no preview
-     |-- ALLOW_DETERMINISTIC ------------> cannot become an action
+     |-- BLOCK ----------------------> no preview
+     |-- ALLOW_DETERMINISTIC --------> cannot become an action
      `-- DEFER_TO_LLM
              |
              v
        BellaOperator.decide()
          - High or Critical
          - approval_required=true
-         - decision risk meets action-kind floor
+         - risk meets action-kind floor
              |
              v
        ActionGate.prepare()
@@ -88,20 +130,19 @@ DeterministicEngine.evaluate()
          - sideEffectsPerformed=false
 ```
 
-The response path cannot call the Action Gate. Action Gate cannot call a real
-connector in this release.
+The response path cannot call Action Gate. Action Gate cannot call a real
+connector in the current production scope. `owner_confirmed=true` is an API
+assertion, not biometric identity proof.
 
 ## Model acceptance flow
 
-Candidate models use a third, separate path:
+Candidate models use a third independent path:
 
 ```text
 18 fixed synthetic scenarios
      |
      v
 BellaOperator.decide()
-  - current bella-core-v1 profile
-  - real mode and risk policy
      |
      v
 bella.operator.v1 envelope
@@ -119,35 +160,31 @@ strict bella.evaluation-response.v1 JSON
      v
 deterministic scenario checks
      |
-     |-- any failure --------------------> rejected; nonzero exit
-     `-- 18/18 pass ---------------------> hashed acceptance report
+     |-- any failure ----------------> rejected; nonzero exit
+     `-- 18/18 pass -----------------> hashed acceptance report
 ```
 
-A passing report does not activate the model and does not grant tool access. It
-only records that the exact model tag passed the current mandatory suite under
-the current Bella profile.
+Passing records that the exact model tag met the current suite. It never
+activates the model or grants memory, connector, or action authority.
 
-## Human correction and tuning-data flow
-
-Human-reviewed learning uses a fourth, explicit path:
+## Human correction and tuning flow
 
 ```text
-human selects one completed interaction
+human selects one visible completed interaction
      |
      v
-review-response command
+review-response
   - stable interaction id
-  - visible prompt only
-  - visible original response only
-  - human rating
+  - visible prompt and original response
+  - controlled human rating
   - optional exact human replacement
   - no hidden Mind Trace packet
   - no credential or capability capture
      |
      v
 SQLiteTuningStore
-  - immutable interaction hashes
-  - immutable feedback events
+  - immutable content hashes
+  - append-only feedback
   - versioned corrections
   - one active correction
   - hash-chained audit
@@ -173,177 +210,145 @@ export-tuning
      `--> manifest.json
 ```
 
-Export does not upload data, start training, or activate a model. Human-derived
-regression cases are references that still require human judgment; they are not
-forced exact-string tests.
+Export never uploads data, starts training, or activates a model. Human-derived
+regression records are review references, not forced exact-string tests.
 
-## Bella Operator boundary
+## Component boundaries
 
-`src/bella_harness/operator/` keeps assistant behavior outside model weights:
+### Deterministic engine
 
-- `models.py` defines modes, risk levels, decisions, and validation.
-- `profile.py` defines `bella-core-v1`, core rules, and mode directives.
-- `risk.py` distinguishes explanations, previews, communications, commitments,
-  money movement, destructive actions, medication changes, and physical control.
-- `context.py` creates the `bella.operator.v1` prompt envelope.
-- `service.py` is the facade used by `BellaHarness`.
+`src/bella_harness/deterministic/` normalizes Unicode and scans confusables,
+leetspeak, spacing, fragments, Markdown, Base64, hex, and ROT13 variants before
+applying blocking and direct-answer rules.
 
-High and Critical decisions set `approval_required=true`, but that metadata is
-not a capability. It only allows a separately supplied exact `ActionSpec` to be
-reviewed by Action Gate.
+### Bella Operator
 
-## Mind Trace memory boundary
+`src/bella_harness/operator/` owns:
 
-`src/bella_harness/memory/` provides a read-only deterministic memory seam:
+- `bella-core-v1` identity;
+- nine operating modes;
+- Low, Medium, High, and Critical consequence levels;
+- visible plans and current approval metadata;
+- accessibility and uncertainty directives;
+- the rule that memory and plans are not execution authority;
+- the rule that completed-action claims require verified tool results.
 
-- bounded record validation;
-- strict JSONL storage checks;
-- approved/current filtering before ranking;
+### Mind Trace
+
+`src/bella_harness/memory/` provides bounded, read-only recall:
+
+- strict records and JSONL validation;
+- approved/current filtering;
+- superseded and expired exclusion;
 - Customer-mode private-memory exclusion;
-- prompt-injection screening before model context;
-- bounded JSON context that denies instruction and action authority.
+- stored prompt-injection screening;
+- bounded JSON context.
 
-Memory does not approve, edit, delete, write, or execute.
+Memory does not approve, write, delete, or execute.
 
-## Bella Action Gate boundary
+### Action Gate
 
-`src/bella_harness/action_gate/` contains:
+`src/bella_harness/action_gate/` owns canonical action fingerprints, previews,
+one-use authorization, expiry, revocation, replay protection, risk floors, and a
+hash-chained audit. Only `mock_action_sandbox` is accepted.
 
-- `models.py` -- action kinds, risk floors, payload validation, preview,
-  authorization, execution, and audit contracts;
-- `canonical.py` -- deterministic `bella.action.v1` JSON and SHA-256 binding;
-- `gate.py` -- preview, authorize, execute, expire, revoke, replay protection,
-  and hash-chain verification.
+### Evaluation Gate
 
-Security properties:
+`src/bella_harness/evaluation/` owns the fixed scenario catalog, strict candidate
+response contract, deterministic checks, all-or-nothing acceptance, and hashed
+reports. Evaluation is pinned to Ollama with no memory, tools, or fallback.
 
-- only `mock_action_sandbox` is accepted;
-- payload keys resembling credentials or capabilities are rejected;
-- preview lifetime is at most 900 seconds;
-- authorization lifetime is at most 300 seconds;
-- raw capability values are never stored or written to audit events;
-- mutation, wrong fingerprint, wrong capability, expiration, and replay fail;
-- High decisions cannot authorize Critical action kinds;
-- all successful executions are local simulations with no side effects.
+### Tuning loop
 
-`owner_confirmed=true` is an explicit API assertion, not biometric proof. Real
-connectors require a future authenticated device-owner layer and durable
-encrypted authorization store.
+`src/bella_harness/tuning/` owns bounded interactions, ratings, corrections,
+SQLite history, deterministic redaction, atomic JSONL exports, and audit-chain
+verification. Normal `bella ask` requests never create tuning records.
 
-## Bella Evaluation Gate boundary
+### Production doctor
 
-`src/bella_harness/evaluation/` contains:
+`src/bella_harness/doctor.py` checks packaged configuration, fail-closed policy,
+output scanning, Operator, Action Gate bounds, Evaluation Gate policy, disabled
+automatic tuning, configured store integrity, backend configuration, private
+Ollama transport, and optional prompt-free live Ollama health.
 
-- `models.py` -- strict scenarios, candidate responses, results, and reports;
-- `scenarios.py` -- exactly 18 mandatory synthetic scenarios;
-- `gate.py` -- operator wrapping, Ollama calls, response parsing, deterministic
-  checks, all-or-nothing acceptance, and base report generation;
-- `secure_gate.py` -- metadata and SHA-256 report verification.
-
-Security properties:
-
-- only a backend whose name is exactly `ollama` is accepted;
-- one exact model tag is pinned for the run;
-- Ollama receives temperature `0`;
-- there is no backend fallback;
-- the suite includes no Mind Trace context, personal conversation, credential,
-  capability, or real connector;
-- candidate output must be one strict JSON object with exact fields and types;
-- 17/18 is rejection, not partial acceptance;
-- report schema, backend, model, counts, acceptance state, results, and digest are
-  verified before the report is written;
-- passing never activates a model or grants action authority.
-
-The evaluation suite complements rather than replaces the deterministic red
-team. Red team evaluates the rule-based input boundary; Evaluation Gate tests
-candidate-model behavior beneath Bella Operator policy.
-
-## Bella tuning boundary
-
-`src/bella_harness/tuning/` contains:
-
-- `models.py` -- bounded interactions, ratings, corrections, and export decisions;
-- `store.py` -- SQLite schema, immutable history, versioned corrections, hashes,
-  and audit verification;
-- `secure_store.py` -- idempotent retry behavior, negative-only correction rules,
-  normalized validation, and export audit events;
-- `redaction.py` -- deterministic local redaction of common identifiers and keys;
-- `export.py` -- atomic JSONL files, file hashes, and dataset manifest;
-- `__init__.py` -- the public tuning API.
-
-Security and privacy properties:
-
-- ordinary `bella ask` never creates or writes the tuning store;
-- only explicit human review commands create records;
-- interaction IDs cannot be reused for different immutable content;
-- feedback is append-only;
-- corrections are versioned, and only one may be active;
-- a correction requires the latest feedback to be negative;
-- good responses cannot receive a replacement;
-- hidden memory context is not accepted by the schema or CLI;
-- redaction is the default export behavior;
-- exact unredacted export requires `--exact`;
-- export refuses an unverified store;
-- outputs are written atomically with best-effort owner-only permissions;
-- every export is recorded in the tuning audit chain;
-- no automatic upload, training, or model activation exists.
-
-The redaction layer detects common patterns but is not a complete PII classifier.
-A human must review any dataset before it leaves the trusted local environment.
-
-## Output scanning
-
-After backend generation, `DeterministicEngine.scan_output()` withholds replies
-containing leaked credentials, private keys, or a configured prompt canary.
-
-## DeterministicEngine
-
-The engine uses pure-Python normalization and regex decisions:
-
-1. NFKC and zero-width normalization.
-2. Confusable, leetspeak, spacing, fragment, Markdown, Base64, hex, and ROT13
-   scan variants.
-3. `BLOCK_RULES` matching.
-4. Direct greetings and arithmetic.
-5. Otherwise `DEFER_TO_LLM`.
-
-This mechanical boundary does not claim to detect every semantic multi-step
-attack. Operator, memory, backend alignment, output scanning, exact action
-binding, model evaluation, and human review provide separate layers.
-
-## Backends
-
-`BackendAbstraction` supports Ollama, OpenAI, Anthropic, and OpenRouter. Enabled
-backends are attempted with the configured default first and fall back on
-`BackendError` for ordinary response generation.
-
-Evaluation Gate does not use fallback. It obtains the pinned Ollama instance
-directly and rejects nonlocal backend names.
+Doctor output contains status metadata, not prompt text, private memory,
+corrections, credentials, or capabilities.
 
 ## Configuration
 
-`config/default.yaml` supports `BELLA__SECTION__KEY=value` overrides and rejects
-literal secrets.
+`config/default.yaml` and the byte-identical packaged `default.yaml` support
+`BELLA__SECTION__KEY=value` environment overrides and reject literal secrets.
 
-- `memory` controls the Mind Trace store and recall bounds.
-- `operator` controls identity, mode, risk, and prompt wrapping.
-- `action_gate` controls only mock preview and authorization lifetimes.
-- `evaluation` pins local Ollama evaluation and optional candidate model tag.
-- `tuning` documents explicit capture, local store, redaction, upload, training,
-  and activation defaults. `store_path: null` requires `--db`.
-- minimal programmatic configs that omit newer sections keep legacy behavior;
-  the shipped default enables the bounded layers without automatic capture.
+- `harness` controls default routing, cloud-fallback consent, fail-closed policy,
+  and output scanning.
+- `memory` controls Mind Trace storage and recall bounds.
+- `operator` enables the model-independent Bella layer.
+- `action_gate` controls mock preview and authorization lifetimes.
+- `evaluation` pins local Ollama acceptance and candidate model tag.
+- `tuning` controls explicit local review storage; automatic capture, upload,
+  training, and activation remain false.
+- `backends` configures enabled providers and transport bounds.
 
-## Verification
+## Release-evidence flow
 
-`redteam/` contains 115 offline probes across 39 specialist agents. Pytest adds
-memory, operator, action fingerprint, risk-floor, expiration, replay, mutation,
-audit-chain, CLI proof, evaluation catalog, strict candidate JSON, all-or-nothing
-acceptance, report integrity, cloud rejection, deterministic Ollama options,
-SQLite tuning integrity, correction versioning, redaction, export hashes, and
-normal-chat non-capture coverage.
+```text
+source commit
+     |
+     v
+Python 3.10 + 3.12 compatibility
+     |
+     v
+compile + dependency audit
+     |
+     v
+unit baseline + 115 red-team probes
+     |
+     v
+wheel + source archive
+     |
+     v
+twine metadata + sdist content validation
+     |
+     v
+clean wheel install + pip check + installed doctor
+     |
+     v
+release-manifest.json + SHA256SUMS
+     |
+     v
+tag/version/main-branch validation
+     |
+     v
+GitHub release assets
+```
 
-`.github/workflows/redteam.yml` runs the full unit and red-team suites on Python
-3.10 and 3.12 and uploads both pytest output and red-team reports. Live Ollama
-evaluation and real training are explicit operator workflows and are not faked
-in CI.
+`src/bella_harness/release_manifest.py` requires:
+
+- a 40-character commit SHA;
+- at least 207 passing unit tests;
+- at least 115 passing red-team probes;
+- successful dependency audit, distribution validation, and wheel smoke test;
+- a ready doctor report whose installed version matches `pyproject.toml`;
+- exactly one version-matched wheel and one source archive;
+- verified artifact hashes.
+
+The tag-driven workflow accepts only `v<project-version>` tags whose commit is
+contained in `main` and whose notes file exists at `docs/releases/<tag>.md`.
+Manual release-workflow runs build evidence but do not publish.
+
+## Verification boundary
+
+CI proves source compilation, Python 3.10/3.12 behavior, dependency audit,
+unit/red-team baselines, package metadata, source-archive contents, clean wheel
+installation, installed doctor readiness, and release-manifest integrity.
+
+CI does not claim:
+
+- a real local model has passed on the final host;
+- physical Android/iPhone behavior;
+- final screen-reader or voice quality;
+- long-running host stability and performance;
+- successful backup restoration on the operator's storage;
+- safety of real connectors, because real connectors are intentionally absent.
+
+See `docs/PRODUCTION_READINESS.md` and `docs/RELEASE_PROCESS.md`.
