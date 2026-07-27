@@ -24,6 +24,7 @@ def test_repository_and_packaged_default_configs_are_identical():
 def test_packaged_defaults_include_private_ollama_bounds_and_no_auto_capture():
     config = load_config()
     ollama = config["backends"]["ollama"]
+    assert config["harness"]["allow_cloud_fallback"] is False
     assert ollama["base_url"] == "http://localhost:11434"
     assert ollama["max_prompt_chars"] == 128000
     assert ollama["max_response_bytes"] == 1000000

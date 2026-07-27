@@ -37,11 +37,13 @@ The project treats these as release-blocking invariants:
 7. Literal secrets are rejected from configuration.
 8. Ollama transport is limited to localhost or literal private addresses.
 9. Ollama redirects and oversized or malformed responses fail closed.
-10. Candidate models require 18/18 mandatory evaluation scenarios.
-11. Normal conversations are not automatically captured for tuning.
-12. Tuning export is redacted by default and never uploads or trains itself.
-13. Configured memory and tuning-store integrity failures block affected flows.
-14. Every pull request must preserve the 115-probe deterministic red-team gate.
+10. Local backend failure cannot trigger cloud egress unless
+    `harness.allow_cloud_fallback` is explicitly true.
+11. Candidate models require 18/18 mandatory evaluation scenarios.
+12. Normal conversations are not automatically captured for tuning.
+13. Tuning export is redacted by default and never uploads or trains itself.
+14. Configured memory and tuning-store integrity failures block affected flows.
+15. Every pull request must preserve the 115-probe deterministic red-team gate.
 
 ## Data handling
 
@@ -54,6 +56,10 @@ issues, CI artifacts, or evaluation reports.
 
 The tuning redactor is defense in depth and is not a complete PII classifier.
 Review datasets manually before moving them outside the trusted local host.
+
+Enabling a cloud provider does not authorize automatic fallback from Ollama.
+Review [docs/CLOUD_EGRESS.md](docs/CLOUD_EGRESS.md) before setting
+`allow_cloud_fallback: true` or selecting a cloud provider as the default.
 
 ## Deployment
 

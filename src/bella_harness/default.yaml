@@ -11,6 +11,9 @@ harness:
   deterministic_target: 0.70
   # Backend used when the deterministic engine defers to an LLM.
   default_backend: ollama
+  # A local backend failure must not silently send the request or recalled
+  # memory to a cloud provider. Set true only after explicit operator consent.
+  allow_cloud_fallback: false
   fail_closed: true
   # Output half of the harness: re-scan the model's response before returning
   # it. Blocks responses that leak credentials or the system prompt.
