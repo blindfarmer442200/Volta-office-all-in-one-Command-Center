@@ -100,3 +100,25 @@ def test_jsonl_store_fails_closed_on_duplicate_or_malformed_records(tmp_path):
 def test_record_rejects_self_supersession():
     with pytest.raises(ValueError, match="cannot supersede itself"):
         _record("same", "Invoice detail", superseded_by="same")
+
+
+def test_record_rejects_string_tags_from_direct_constructor():
+    with pytest.raises(ValueError, match="list or tuple"):
+        MemoryRecord(
+            id="bad-direct-tags",
+            content="Invoice detail",
+            source="unit-test",
+            tags="invoice",
+        )
+
+
+def test_record_from_dict_rejects_string_tags():
+    with pytest.raises(ValueError, match="JSON array"):
+        MemoryRecord.from_dict(
+            {
+                "id": "bad-json-tags",
+                "content": "Invoice detail",
+                "source": "unit-test",
+                "tags": "invoice",
+            }
+        )
