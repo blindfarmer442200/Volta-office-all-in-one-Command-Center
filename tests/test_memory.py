@@ -103,7 +103,10 @@ def test_record_rejects_self_supersession_and_non_array_tags():
     with pytest.raises(ValueError, match="cannot supersede itself"):
         _record("same", "Invoice detail", superseded_by="same")
 
+    with pytest.raises(ValueError, match="list or tuple"):
+        MemoryRecord(id="bad-direct", content="Invoice detail", source="test", tags="invoice")
+
     with pytest.raises(ValueError, match="JSON array"):
         MemoryRecord.from_dict(
-            {"id": "bad", "content": "Invoice detail", "source": "test", "tags": "invoice"}
+            {"id": "bad-json", "content": "Invoice detail", "source": "test", "tags": "invoice"}
         )
