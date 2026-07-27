@@ -16,10 +16,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from bella_harness.config import load_config
-from bella_harness.deterministic.engine import Action
-from bella_harness.doctor import run_doctor
 from bella_harness.harness import BellaHarness, HarnessResult
 from bella_harness.operator import BellaMode
+from bella_harness.service.doctor import run_service_doctor
 from bella_harness.service.models import (
     ChatRequest,
     ChatResponse,
@@ -114,15 +113,17 @@ def create_app(
         settings.token_env,
         environment=os.environ if environment is None else environment,
     )
-    # Explicit token arguments used by tests and embedding callers receive the
-    # same strength validation as environment-sourced tokens.
     if token is not None:
         service_token = resolve_service_token(
             "BELLA_EXPLICIT_SERVICE_TOKEN",
             environment={"BELLA_EXPLICIT_SERVICE_TOKEN": token},
         )
 
-    offline_report = run_doctor(selected_config, live=False)
+    offline_report = run_service_doctor(
+        selected_config,
+        live=False,
+        token_override=service_token,
+    )
     critical_failures = [
         check.name
         for check in offline_report.checks
@@ -169,7 +170,6 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
 
     async def require_auth(
-        request: Request,
         authorization: str | None = Header(default=None, alias="Authorization"),
     ) -> None:
         try:
@@ -181,10 +181,7 @@ def create_app(
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
 
-    async def require_chat_access(
-        request: Request,
-        _: None = Depends(require_auth),
-    ) -> None:
+    async def require_chat_access(_: None = Depends(require_auth)) -> None:
         allowed, retry_after = await limiter.allow()
         if not allowed:
             raise HTTPException(
@@ -233,7 +230,12 @@ def create_app(
 
     @app.get("/health/ready", response_model=ReadyResponse)
     async def ready(_: None = Depends(require_auth)):
-        report = await asyncio.to_thread(run_doctor, selected_config, live=True)
+        report = await asyncio.to_thread(
+            run_service_doctor,
+            selected_config,
+            live=True,
+            token_override=service_token,
+        )
         response = ReadyResponse(
             ready=report.ready,
             package_version=report.package_version,
