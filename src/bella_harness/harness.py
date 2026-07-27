@@ -1,8 +1,9 @@
-"""The orchestrator: deterministic gate, Mind Trace recall, then LLM backend.
+"""The orchestrator: deterministic gate, Mind Trace recall, Bella operator, backend.
 
-Memory is intentionally inserted only after the input gate defers a request to
-an LLM. Blocked and deterministic-answerable requests never read the memory
-store. The model's response still passes through output scanning before return.
+Memory and operator context are intentionally inserted only after the input gate
+defers a request to an LLM. Blocked and deterministic-answerable requests never
+read the memory store or build a model prompt. The model response still passes
+through output scanning before return.
 """
 
 from __future__ import annotations
@@ -19,6 +20,11 @@ from bella_harness.memory import (
     MindTraceMemoryService,
     NullMemoryStore,
 )
+from bella_harness.operator import (
+    BellaOperator,
+    OperatorDecision,
+    OperatorValidationError,
+)
 
 REFUSAL_MESSAGE = "I can't help with that request."
 BACKEND_UNAVAILABLE_MESSAGE = (
@@ -27,6 +33,9 @@ BACKEND_UNAVAILABLE_MESSAGE = (
 MEMORY_UNAVAILABLE_MESSAGE = (
     "I'm unable to verify the approved memory store right now, so I withheld the "
     "model response rather than answer with uncertain context."
+)
+INVALID_OPERATOR_MODE_MESSAGE = (
+    "I can't continue because the requested Bella mode is not recognized."
 )
 OUTPUT_BLOCKED_MESSAGE = (
     "I generated a response but withheld it because it appeared to contain "
@@ -44,6 +53,12 @@ class HarnessResult:
     memory_ids: tuple[str, ...] = field(default_factory=tuple)
     memory_explanations: tuple[str, ...] = field(default_factory=tuple)
     excluded_unsafe_memory_ids: tuple[str, ...] = field(default_factory=tuple)
+    operator_profile_id: str | None = None
+    operator_mode: str | None = None
+    risk_level: str | None = None
+    approval_required: bool = False
+    operator_reasons: tuple[str, ...] = field(default_factory=tuple)
+    operator_plan: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def memory_used(self) -> bool:
@@ -51,11 +66,12 @@ class HarnessResult:
 
 
 class BellaHarness:
-    """Deterministic-first request handler with bounded approved-memory recall.
+    """Deterministic-first request handler with memory and operator boundaries.
 
     The deterministic engine remains the first and last security boundary. Mind
-    Trace is a read-only context source reached only for requests that defer to
-    an LLM. Memory is treated as untrusted data and cannot grant action authority.
+    Trace is a read-only context source. BellaOperator adds model-independent
+    identity, mode, risk, accessibility, and approval policy. Neither memory nor
+    an operator plan can grant action authority.
     """
 
     def __init__(
@@ -69,6 +85,7 @@ class BellaHarness:
         self._backends: BackendAbstraction | None = None
         self._memory_store_override = memory_store
         self._memory: MindTraceMemoryService | None = None
+        self._operator: BellaOperator | None = None
 
     @property
     def backends(self) -> BackendAbstraction:
@@ -86,7 +103,6 @@ class BellaHarness:
 
     @property
     def output_scanning_enabled(self) -> bool:
-        # Default on: an unconfigured harness should still screen output.
         return bool(self._output_scanning_config.get("enabled", True))
 
     @property
@@ -99,8 +115,6 @@ class BellaHarness:
 
     @property
     def memory_enabled(self) -> bool:
-        # Empty memory is safe and preserves the original prompt, so enabling the
-        # boundary by default does not alter existing deployments.
         return bool(self._memory_config.get("enabled", True))
 
     @property
@@ -132,6 +146,38 @@ class BellaHarness:
             )
         return self._memory
 
+    @property
+    def _operator_config(self) -> dict:
+        return self.config.get("operator", {}) or {}
+
+    @property
+    def operator_enabled(self) -> bool:
+        # Minimal injected test configs from older callers remain backward
+        # compatible unless they opt in. The shipped default.yaml enables it.
+        return bool(self._operator_config.get("enabled", False))
+
+    @property
+    def operator(self) -> BellaOperator:
+        if self._operator is None:
+            self._operator = BellaOperator()
+        return self._operator
+
+    @staticmethod
+    def _operator_result_fields(
+        decision: OperatorDecision | None,
+        profile_id: str | None = None,
+    ) -> dict:
+        if decision is None:
+            return {}
+        return {
+            "operator_profile_id": profile_id,
+            "operator_mode": decision.mode.value,
+            "risk_level": decision.risk_level.value,
+            "approval_required": decision.approval_required,
+            "operator_reasons": decision.reasons,
+            "operator_plan": decision.plan,
+        }
+
     def handle(self, request_text: str, *, mode: str = "default") -> HarnessResult:
         decision = self.deterministic_engine.evaluate(request_text)
 
@@ -151,14 +197,28 @@ class BellaHarness:
                 handled_deterministically=True,
             )
 
-        # DEFER_TO_LLM. Only now may the request read approved memory.
+        # DEFER_TO_LLM. Validate operator mode before reading memory.
+        operator_decision: OperatorDecision | None = None
+        selected_mode = mode
+        if self.operator_enabled:
+            try:
+                operator_decision = self.operator.decide(request_text, mode=mode)
+                selected_mode = operator_decision.mode.value
+            except OperatorValidationError:
+                return HarnessResult(
+                    action=Action.BLOCK,
+                    response=INVALID_OPERATOR_MODE_MESSAGE,
+                    category="invalid_operator_mode",
+                    handled_deterministically=False,
+                )
+
         prompt = request_text
         memory_ids: tuple[str, ...] = ()
         memory_explanations: tuple[str, ...] = ()
         excluded_unsafe_memory_ids: tuple[str, ...] = ()
         if self.memory_enabled:
             try:
-                envelope = self.memory.build_prompt(request_text, mode=mode)
+                envelope = self.memory.build_prompt(request_text, mode=selected_mode)
                 prompt = envelope.prompt
                 memory_ids = envelope.memory_ids
                 memory_explanations = envelope.explanations
@@ -170,10 +230,20 @@ class BellaHarness:
                         response=MEMORY_UNAVAILABLE_MESSAGE,
                         category="memory_unavailable",
                         handled_deterministically=False,
+                        **self._operator_result_fields(operator_decision),
                     )
-                # Explicit fail-open mode never passes partial/unverified memory;
-                # it uses the original request with no memory instead.
                 prompt = request_text
+
+        operator_profile_id: str | None = None
+        if operator_decision is not None:
+            operator_envelope = self.operator.wrap(prompt, operator_decision)
+            prompt = operator_envelope.prompt
+            operator_profile_id = operator_envelope.profile_id
+
+        operator_fields = self._operator_result_fields(
+            operator_decision,
+            profile_id=operator_profile_id,
+        )
 
         try:
             backend_response = self.backends.generate(prompt)
@@ -187,11 +257,10 @@ class BellaHarness:
                     memory_ids=memory_ids,
                     memory_explanations=memory_explanations,
                     excluded_unsafe_memory_ids=excluded_unsafe_memory_ids,
+                    **operator_fields,
                 )
             raise
 
-        # Output half of the harness: re-check the model's response before
-        # returning it, so leaked secrets / system-prompt content are withheld.
         if self.output_scanning_enabled:
             output_decision = self.deterministic_engine.scan_output(
                 backend_response.text, canary=self.output_canary
@@ -206,6 +275,7 @@ class BellaHarness:
                     memory_ids=memory_ids,
                     memory_explanations=memory_explanations,
                     excluded_unsafe_memory_ids=excluded_unsafe_memory_ids,
+                    **operator_fields,
                 )
 
         return HarnessResult(
@@ -216,4 +286,5 @@ class BellaHarness:
             memory_ids=memory_ids,
             memory_explanations=memory_explanations,
             excluded_unsafe_memory_ids=excluded_unsafe_memory_ids,
+            **operator_fields,
         )
