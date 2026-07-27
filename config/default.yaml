@@ -1,9 +1,8 @@
 # bella-harness default configuration
 #
 # API keys are NEVER read from this file. They are sourced exclusively from
-# environment variables (see backends.*.api_key_env below). Any api_key or
-# api_key_env value literally present in a config file is rejected at load
-# time to prevent secrets from being committed.
+# environment variables (see backends.*.api_key_env below). Any literal secret
+# in configuration is rejected at load time.
 
 harness:
   # Fraction-of-traffic target the deterministic engine aims to resolve
@@ -20,6 +19,19 @@ harness:
     # Optional sentinel string placed in your system prompt. If it ever shows
     # up in a model response, the system prompt leaked and the reply is blocked.
     canary: null
+
+# Mind Trace is reached only after the deterministic input gate has deferred a
+# request to an LLM. With no store_path it uses an empty in-memory store and
+# leaves the original request unchanged.
+memory:
+  enabled: true
+  # A configured store that cannot be verified blocks the model call by default.
+  fail_closed: true
+  store_path: null
+  max_results: 5
+  min_score: 10
+  max_context_chars: 6000
+  max_memory_chars: 1200
 
 deterministic:
   rules_file: null # null = use built-in rules in deterministic/rules.py
