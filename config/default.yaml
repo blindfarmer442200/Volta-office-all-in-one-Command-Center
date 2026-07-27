@@ -47,6 +47,17 @@ action_gate:
   preview_ttl_seconds: 900
   authorization_ttl_seconds: 300
 
+# Evaluation is an all-or-nothing synthetic behavior gate for one pinned local
+# Ollama model. It never reads personal memory, falls back to cloud, changes the
+# active model, or grants tool permissions.
+evaluation:
+  enabled: true
+  backend: ollama
+  # null uses backends.ollama.model. Override explicitly when testing a candidate.
+  model: null
+  require_all: true
+  report_path: bella-evaluation-report.json
+
 
 deterministic:
   rules_file: null # null = use built-in rules in deterministic/rules.py
