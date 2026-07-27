@@ -62,6 +62,23 @@ def test_chat_requires_bearer_auth_and_never_echoes_prompt_in_error():
     assert secret_prompt not in response.text
 
 
+def test_failed_authentication_is_limited_without_blocking_valid_token():
+    config = _config(
+        auth_failure_limit_requests=1,
+        auth_failure_limit_window_seconds=60,
+    )
+    wrong = {"Authorization": "Bearer " + "x" * 32}
+    with _client(config=config) as client:
+        first = client.post("/v1/chat", headers=wrong, json={"prompt": "hello"})
+        second = client.post("/v1/chat", headers=wrong, json={"prompt": "hello"})
+        valid = client.post("/v1/chat", headers=AUTH, json={"prompt": "hello"})
+    assert first.status_code == 401
+    assert second.status_code == 429
+    assert second.json()["error"] == "auth_rate_limited"
+    assert second.json()["retry_after_seconds"] >= 1
+    assert valid.status_code == 200
+
+
 def test_deterministic_chat_returns_no_action_and_hides_trace_by_default():
     with _client() as client:
         response = client.post(
@@ -77,6 +94,26 @@ def test_deterministic_chat_returns_no_action_and_hides_trace_by_default():
     assert payload["external_action_performed"] is False
     assert payload["memory_count"] == 0
     assert "trace" not in payload
+
+
+def test_security_block_maps_to_403_without_execution():
+    harness = FakeHarness(
+        HarnessResult(
+            action=Action.BLOCK,
+            response="I cannot help with that request.",
+            category="prompt_injection",
+            handled_deterministically=True,
+        )
+    )
+    with _client(harness=harness) as client:
+        response = client.post(
+            "/v1/chat",
+            headers=AUTH,
+            json={"prompt": "blocked request"},
+        )
+    assert response.status_code == 403
+    assert response.json()["action"] == "block"
+    assert response.json()["external_action_performed"] is False
 
 
 def test_trace_requires_explicit_request_and_backend_failure_maps_to_503():
