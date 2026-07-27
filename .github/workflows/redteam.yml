@@ -63,11 +63,42 @@ jobs:
           name: redteam-report-py${{ matrix.python-version }}
           path: redteam-report.json
 
+      - name: Set reproducible build timestamp
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
       - name: Build wheel and source archive
         run: python -m build
 
       - name: Validate distribution metadata
         run: python -m twine check dist/*
+
+      - name: Validate source archive contents
+        run: |
+          python - <<'PY'
+          import glob
+          import tarfile
+
+          archives = glob.glob("dist/*.tar.gz")
+          assert len(archives) == 1, archives
+          with tarfile.open(archives[0], "r:gz") as archive:
+              names = set(archive.getnames())
+          required = {
+              "CHANGELOG.md",
+              "SECURITY.md",
+              "config/default.yaml",
+              "docs/PRODUCTION_READINESS.md",
+              "docs/RELEASE_PROCESS.md",
+              "docs/CLOUD_EGRESS.md",
+              "scripts/build_release_manifest.py",
+              "tests/test_release_manifest.py",
+              "redteam/runner.py",
+          }
+          missing = sorted(
+              item for item in required
+              if not any(name == item or name.endswith("/" + item) for name in names)
+          )
+          assert not missing, missing
+          PY
 
       - name: Smoke-test installed wheel
         shell: bash
