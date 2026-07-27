@@ -127,6 +127,7 @@ def build_release_manifest(
     dependency_audit_passed: bool,
     distribution_check_passed: bool,
     wheel_smoke_passed: bool,
+    container_smoke_passed: bool,
 ) -> dict[str, Any]:
     """Validate release evidence, hash artifacts, and write atomic outputs."""
     if not isinstance(commit_sha, str) or not _COMMIT_RE.fullmatch(commit_sha):
@@ -152,6 +153,7 @@ def build_release_manifest(
         ("dependency audit", dependency_audit_passed),
         ("distribution check", distribution_check_passed),
         ("wheel smoke", wheel_smoke_passed),
+        ("container smoke", container_smoke_passed),
     ):
         if value is not True:
             raise ReleaseManifestError(f"{name} must pass before manifest generation")
@@ -219,6 +221,7 @@ def build_release_manifest(
             "dependency_audit_passed": True,
             "distribution_check_passed": True,
             "wheel_smoke_passed": True,
+            "container_smoke_passed": True,
         },
         "artifacts": file_records,
     }
@@ -261,6 +264,15 @@ def verify_release_manifest(
             return False
         if gates.get("doctor_package_version") != manifest.get("version"):
             return False
+        for gate_name in (
+            "doctor_ready",
+            "dependency_audit_passed",
+            "distribution_check_passed",
+            "wheel_smoke_passed",
+            "container_smoke_passed",
+        ):
+            if gates.get(gate_name) is not True:
+                return False
         directory = Path(dist_dir)
         records = manifest.get("artifacts")
         if not isinstance(records, list) or len(records) != 2:
