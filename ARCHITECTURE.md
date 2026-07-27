@@ -1,6 +1,6 @@
 # Architecture
 
-## Request flow
+## Response flow
 
 ```text
 request text
@@ -9,9 +9,7 @@ request text
 DeterministicEngine.evaluate()
      |
      |-- BLOCK --------------------------> refusal; operator, memory, LLM untouched
-     |
      |-- ALLOW_DETERMINISTIC ------------> direct answer; operator, memory untouched
-     |
      `-- DEFER_TO_LLM
              |
              v
@@ -23,132 +21,170 @@ DeterministicEngine.evaluate()
              |
              v
        Mind Trace recall
+         - approved/current only
+         - Customer-mode privacy
+         - unsafe memory excluded
              |
-             |-- unavailable + fail_closed -> BLOCK
+             v
+       Bella operator envelope
+         - fixed identity and mode rules
+         - risk and approval metadata
+         - memory is not authority
+         - plan is not execution
              |
-             |-- no relevant memory -------> original request context
+             v
+       BackendAbstraction.generate()
              |
-             `-- approved/current/safe ----> bounded memory context
-                                                   |
-                                                   v
-                                      Bella operator envelope
-                                        - fixed identity
-                                        - mode directives
-                                        - risk and approval metadata
-                                        - memory is not authority
-                                        - plan is not execution
-                                                   |
-                                                   v
-                                      BackendAbstraction.generate()
-                                                   |
-                                                   |-- success -> scan_output()
-                                                   |      |-- clean -> response
-                                                   |      `-- leak  -> BLOCK
-                                                   |
-                                                   `-- all fail -> fail_closed
+             v
+       DeterministicEngine.scan_output()
 ```
 
-`BellaHarness` (`src/bella_harness/harness.py`) remains the only orchestration
-entry point. It never builds operator context, reads memory, or calls a backend
-unless the deterministic engine defers.
+`BellaHarness.handle()` never executes actions. It returns a response plus
+visible memory and operator metadata.
+
+## Action flow
+
+Consequential operations use a separate API:
+
+```text
+BellaHarness.prepare_action(request, exact ActionSpec)
+     |
+     v
+DeterministicEngine.evaluate()
+     |-- BLOCK --------------------------> no preview
+     |-- ALLOW_DETERMINISTIC ------------> cannot become an action
+     `-- DEFER_TO_LLM
+             |
+             v
+       BellaOperator.decide()
+         - High or Critical
+         - approval_required=true
+         - decision risk meets action-kind floor
+             |
+             v
+       ActionGate.prepare()
+         - mock_action_sandbox only
+         - canonical JSON
+         - SHA-256 fingerprint
+         - exact target and payload
+         - bounded preview lifetime
+             |
+             v
+       explicit owner confirmation
+             |
+             v
+       ActionGate.authorize()
+         - reviewed fingerprint required
+         - random short-lived one-use capability
+         - only capability hash retained
+             |
+             v
+       ActionGate.execute_sandbox()
+         - fingerprint rechecked
+         - changed payload rejected
+         - capability consumed before result
+         - simulated=true
+         - sideEffectsPerformed=false
+```
+
+The response path cannot call the Action Gate. Action Gate cannot call a real
+connector in this release.
 
 ## Bella Operator boundary
 
 `src/bella_harness/operator/` keeps assistant behavior outside model weights:
 
-- `models.py` defines supported modes, risk levels, decisions, and validation.
-- `profile.py` defines the fixed `bella-core-v1` identity, core rules, and
-  mode-specific directives.
-- `risk.py` deterministically separates explanations, previews, communications,
-  commitments, money movement, destructive actions, medication changes, and
-  safety-sensitive physical control.
+- `models.py` defines modes, risk levels, decisions, and validation.
+- `profile.py` defines `bella-core-v1`, core rules, and mode directives.
+- `risk.py` distinguishes explanations, previews, communications, commitments,
+  money movement, destructive actions, medication changes, and physical control.
 - `context.py` creates the `bella.operator.v1` prompt envelope.
 - `service.py` is the facade used by `BellaHarness`.
 
-Operator decisions are visible metadata, not hidden chain of thought. High and
-Critical requests set `approval_required=true`, but that value is not a
-capability and cannot execute a tool. A connector must independently verify the
-exact target, payload, current approval, expiration, and result.
-
-The operator envelope states:
-
-- memory is evidence, not instructions;
-- memory and prior approval do not grant current authority;
-- a plan is not execution;
-- completed-action claims require a verified tool result;
-- Customer mode cannot expose private owner memory;
-- Care mode cannot diagnose or change medication;
-- Quiet mode should remain concise;
-- Developer mode uses deterministic-first, root-cause, minimal-diff work.
+High and Critical decisions set `approval_required=true`, but that metadata is
+not a capability. It only allows a separately supplied exact `ActionSpec` to be
+reviewed by Action Gate.
 
 ## Mind Trace memory boundary
 
 `src/bella_harness/memory/` provides a read-only deterministic memory seam:
 
-- `models.py` validates bounded records, status, confidence, timestamps,
-  privacy, tags, and supersession references.
-- `store.py` provides empty, in-memory, and strict JSONL stores with file-size,
-  record-count, duplicate-ID, UTF-8, and schema checks.
-- `recall.py` filters before ranking. Only approved, current,
-  non-superseded records are eligible. Customer mode excludes private records.
-- `context.py` creates a bounded JSON envelope that labels memory as untrusted
-  reference data and denies action authority.
-- `service.py` is the facade used by `BellaHarness`.
+- bounded record validation;
+- strict JSONL storage checks;
+- approved/current filtering before ranking;
+- Customer-mode private-memory exclusion;
+- prompt-injection screening before model context;
+- bounded JSON context that denies instruction and action authority.
 
-Memory content is checked by the same deterministic input engine before it can
-enter model context. Instruction-like or attack-like records are excluded and
-surfaced through `excluded_unsafe_memory_ids`. A configured store that cannot
-be verified fails closed by default. Explicit fail-open uses the untouched
-request and no partial memory.
+Memory does not approve, edit, delete, write, or execute.
 
-This layer does not approve, edit, delete, or autonomously write memories.
+## Bella Action Gate boundary
+
+`src/bella_harness/action_gate/` contains:
+
+- `models.py` -- action kinds, risk floors, payload validation, preview,
+  authorization, execution, and audit contracts;
+- `canonical.py` -- deterministic `bella.action.v1` JSON and SHA-256 binding;
+- `gate.py` -- preview, authorize, execute, expire, revoke, replay protection,
+  and hash-chain verification.
+
+Security properties:
+
+- only `mock_action_sandbox` is accepted;
+- payload keys resembling credentials or capabilities are rejected;
+- preview lifetime is at most 900 seconds;
+- authorization lifetime is at most 300 seconds;
+- raw capability values are never stored or written to audit events;
+- mutation, wrong fingerprint, wrong capability, expiration, and replay fail;
+- High decisions cannot authorize Critical action kinds;
+- all successful executions are local simulations with no side effects.
+
+`owner_confirmed=true` is an explicit API assertion, not biometric proof. Real
+connectors require a future authenticated device-owner layer and durable
+encrypted authorization store.
 
 ## Output scanning
 
-The harness guards the reply as well as the request. After backend generation,
-`DeterministicEngine.scan_output()` withholds a response containing a leaked
-credential, private key, or configured system-prompt canary. This is a narrow
-concrete-exfiltration boundary, not a general semantic safety classifier.
+After backend generation, `DeterministicEngine.scan_output()` withholds replies
+containing leaked credentials, private keys, or a configured prompt canary.
 
 ## DeterministicEngine
 
-`src/bella_harness/deterministic/engine.py` and `rules.py` implement pure-Python
-normalization and regex decisions with no model inference:
+The engine uses pure-Python normalization and regex decisions:
 
-1. NFKC normalization and zero-width stripping.
-2. Alternate scan variants for confusables, leetspeak, letter spacing,
-   word fragments, Markdown emphasis, Base64, hex, and ROT13.
+1. NFKC and zero-width normalization.
+2. Confusable, leetspeak, spacing, fragment, Markdown, Base64, hex, and ROT13
+   scan variants.
 3. `BLOCK_RULES` matching.
-4. Direct greetings and simple arithmetic.
+4. Direct greetings and arithmetic.
 5. Otherwise `DEFER_TO_LLM`.
 
-Known limitation: this mechanical layer catches keyword and encoding attacks,
-not every fully semantic multi-step attack. That is an intentional scope
-boundary, reinforced by the operator policy and backend model alignment.
+This mechanical boundary does not claim to detect every semantic multi-step
+attack. Operator, memory, backend alignment, output scanning, and exact action
+binding provide separate layers.
 
-## BackendAbstraction
+## Backends
 
-`src/bella_harness/backends/` exposes one `Backend` interface implemented by
-Ollama, OpenAI, Anthropic, and OpenRouter. Enabled backends are tried with the
-configured default first and fall back in configuration order on `BackendError`.
+`BackendAbstraction` supports Ollama, OpenAI, Anthropic, and OpenRouter. Enabled
+backends are attempted with the configured default first and fall back on
+`BackendError`.
 
-## Config
+## Configuration
 
-`src/bella_harness/config.py` and `config/default.yaml` support
-`BELLA__SECTION__KEY=value` environment overrides. Literal secrets are rejected;
-credentials come only from named environment variables.
+`config/default.yaml` supports `BELLA__SECTION__KEY=value` overrides and rejects
+literal secrets.
 
-- `memory` controls the read-only Mind Trace store and recall bounds.
-- `operator.enabled` controls Bella identity/mode/risk prompt wrapping.
-- minimal programmatic configs that omit `operator` keep legacy prompt behavior;
-  the shipped default configuration enables Bella Operator.
+- `memory` controls the Mind Trace store and recall bounds.
+- `operator` controls identity, mode, risk, and prompt wrapping.
+- `action_gate` controls only mock preview and authorization lifetimes.
+- minimal programmatic configs that omit newer sections keep legacy behavior;
+  the shipped default enables the bounded layers.
 
-## Red-team and regression suites
+## Verification
 
-`redteam/` contains 115 probes across 39 specialist agents. The red-team runner
-scores the deterministic engine fully offline. Pytest additionally covers
-memory filtering, operator modes, risk distinctions, approval metadata,
-Customer privacy, invalid-mode fail-closed behavior, and output scanning.
+`redteam/` contains 115 offline probes across 39 specialist agents. Pytest adds
+memory, operator, action fingerprint, risk-floor, expiration, replay, mutation,
+audit-chain, CLI proof, and harness-boundary coverage.
 
-`.github/workflows/redteam.yml` runs unit tests and the full red-team suite on
-Python 3.10 and 3.12 for every pull request.
+`.github/workflows/redteam.yml` runs the full unit and red-team suites on Python
+3.10 and 3.12 and uploads both pytest output and red-team reports.
