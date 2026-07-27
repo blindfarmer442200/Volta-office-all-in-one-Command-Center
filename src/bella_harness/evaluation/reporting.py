@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -100,6 +101,6 @@ def load_verified_report(path: str | Path) -> dict[str, Any]:
         raise EvaluationError("evaluation report digest is malformed")
 
     expected = report_digest(payload)
-    if not hashlib.compare_digest(payload["digest"], expected):
+    if not hmac.compare_digest(payload["digest"], expected):
         raise EvaluationError("evaluation report digest verification failed")
     return payload
