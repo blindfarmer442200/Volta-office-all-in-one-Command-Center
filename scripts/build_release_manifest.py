@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build or verify Bella release evidence using only the standard library."""
+"""Build, verify, or tag-check Bella release evidence."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import sys
 from bella_harness.release_manifest import (
     ReleaseManifestError,
     build_release_manifest,
+    read_project_version,
+    validate_release_tag,
     verify_release_manifest,
 )
 
@@ -34,6 +36,10 @@ def _parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify", help="Verify a release manifest and artifacts.")
     verify.add_argument("--manifest", default="release-manifest.json")
     verify.add_argument("--dist-dir", default="dist")
+
+    tag = subparsers.add_parser("check-tag", help="Verify vTAG matches project version.")
+    tag.add_argument("--tag", required=True)
+    tag.add_argument("--pyproject", default="pyproject.toml")
     return parser
 
 
@@ -66,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+            return 0
+        if args.command == "check-tag":
+            version = read_project_version(args.pyproject)
+            validate_release_tag(args.tag, version)
+            print(json.dumps({"tag": args.tag, "version": version, "valid": True}, sort_keys=True))
             return 0
         verified = verify_release_manifest(args.manifest, dist_dir=args.dist_dir)
         print(json.dumps({"verified": verified}, sort_keys=True))
