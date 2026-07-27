@@ -28,7 +28,7 @@ def test_mode_aliases_are_explicit_and_unknown_modes_fail():
 
 
 @pytest.mark.parametrize(
-    ("request", "expected"),
+    ("prompt", "expected"),
     [
         ("Pay invoice 1042", RiskLevel.CRITICAL),
         ("Send $5 to John", RiskLevel.CRITICAL),
@@ -42,8 +42,8 @@ def test_mode_aliases_are_explicit_and_unknown_modes_fail():
         ("Explain photosynthesis", RiskLevel.LOW),
     ],
 )
-def test_risk_classification_contract(request, expected):
-    decision = classify_request(request)
+def test_risk_classification_contract(prompt, expected):
+    decision = classify_request(prompt)
     assert decision.risk_level == expected
     assert decision.approval_required is (expected in {RiskLevel.HIGH, RiskLevel.CRITICAL})
 
