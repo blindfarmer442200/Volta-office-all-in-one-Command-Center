@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from bella_harness.config import load_config
+from bella_harness.deterministic.engine import Action
 from bella_harness.harness import BellaHarness, HarnessResult
 from bella_harness.operator import BellaMode
 from bella_harness.service.doctor import run_service_doctor
@@ -60,6 +61,8 @@ def _status_for_result(result: HarnessResult) -> int:
         return 422
     if result.category in {"credential_leak", "private_key_leak", "system_prompt_leak"}:
         return 502
+    if result.action == Action.BLOCK:
+        return 403
     return 200
 
 
@@ -137,9 +140,13 @@ def create_app(
 
     selected_harness = harness or BellaHarness(config=selected_config)
     authenticator = ServiceAuthenticator(service_token)
-    limiter = SlidingWindowRateLimiter(
+    request_limiter = SlidingWindowRateLimiter(
         requests=settings.rate_limit_requests,
         window_seconds=settings.rate_limit_window_seconds,
+    )
+    auth_failure_limiter = SlidingWindowRateLimiter(
+        requests=settings.auth_failure_limit_requests,
+        window_seconds=settings.auth_failure_limit_window_seconds,
     )
     semaphore = asyncio.Semaphore(settings.max_concurrent_requests)
     executor = ThreadPoolExecutor(
@@ -175,14 +182,21 @@ def create_app(
         try:
             authenticator.authenticate(authorization)
         except AuthenticationError as exc:
+            allowed, retry_after = await auth_failure_limiter.allow()
+            if not allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail="auth_rate_limited",
+                    headers={"Retry-After": str(retry_after)},
+                ) from exc
             raise HTTPException(
                 status_code=401,
                 detail="unauthorized",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
 
-    async def require_chat_access(_: None = Depends(require_auth)) -> None:
-        allowed, retry_after = await limiter.allow()
+    async def require_authenticated_access(_: None = Depends(require_auth)) -> None:
+        allowed, retry_after = await request_limiter.allow()
         if not allowed:
             raise HTTPException(
                 status_code=429,
@@ -229,7 +243,7 @@ def create_app(
         return LiveResponse()
 
     @app.get("/health/ready", response_model=ReadyResponse)
-    async def ready(_: None = Depends(require_auth)):
+    async def ready(_: None = Depends(require_authenticated_access)):
         report = await asyncio.to_thread(
             run_service_doctor,
             selected_config,
@@ -253,7 +267,7 @@ def create_app(
     async def chat(
         chat_request: ChatRequest,
         request: Request,
-        _: None = Depends(require_chat_access),
+        _: None = Depends(require_authenticated_access),
     ):
         request_id = _request_id(request)
         if not chat_request.prompt.strip():
