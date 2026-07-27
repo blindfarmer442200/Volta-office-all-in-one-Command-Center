@@ -33,6 +33,15 @@ memory:
   max_context_chars: 6000
   max_memory_chars: 1200
 
+# Bella Operator adds a fixed identity, mode directives, deterministic risk
+# metadata, visible non-executing plans, and approval boundaries. The model may
+# change; these rules remain outside the model.
+operator:
+  enabled: true
+  # Supported modes: default, life, home, business, technical, care,
+  # developer, customer, quiet.
+
+
 deterministic:
   rules_file: null # null = use built-in rules in deterministic/rules.py
 
