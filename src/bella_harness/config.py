@@ -1,9 +1,8 @@
-"""Configuration loading: YAML on disk, overridden by environment variables.
+"""Configuration loading: packaged YAML, overridden by environment variables.
 
-Precedence (lowest to highest): built-in defaults shipped in the YAML file
-< environment variable overrides. API keys are a special case: they are
-never read from the YAML file at all, only from the environment variable
-named by a backend's ``api_key_env`` setting.
+Precedence (lowest to highest): packaged defaults < environment variable
+overrides. API keys are a special case: they are never read from YAML, only
+from the environment variable named by a backend's ``api_key_env`` setting.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "default.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().with_name("default.yaml")
 ENV_PREFIX = "BELLA"
 ENV_NEST_SEP = "__"
 
@@ -26,10 +25,10 @@ _SECRET_KEY_RE = re.compile(r"(api_?key|secret|token|password|passwd|credential)
 
 
 def _is_secret_bearing_key(key: str) -> bool:
-    """True if this key name should hold a secret (and therefore must not, in a file).
+    """True when a key should reference a secret rather than contain one.
 
-    Keys ending in ``_env`` are exempt: they hold the *name* of an environment
-    variable (e.g. api_key_env: OPENAI_API_KEY), not the secret itself.
+    Keys ending in ``_env`` are exempt because they hold the name of an
+    environment variable, not the secret itself.
     """
     name = str(key).lower()
     if name.endswith("_env"):
@@ -42,7 +41,7 @@ class ConfigError(ValueError):
 
 
 def _reject_literal_secrets(node: Any, path: str = "") -> None:
-    """Recursively walk the parsed YAML and refuse literal secret values."""
+    """Recursively refuse literal secret values in configuration."""
     if isinstance(node, dict):
         for key, value in node.items():
             key_path = f"{path}.{key}" if path else str(key)
@@ -55,28 +54,23 @@ def _reject_literal_secrets(node: Any, path: str = "") -> None:
                 )
             _reject_literal_secrets(value, key_path)
     elif isinstance(node, list):
-        for i, item in enumerate(node):
-            _reject_literal_secrets(item, f"{path}[{i}]")
+        for index, item in enumerate(node):
+            _reject_literal_secrets(item, f"{path}[{index}]")
 
 
 def _apply_env_overrides(data: dict, prefix: str = ENV_PREFIX) -> dict:
-    """Overlay environment variables of the form BELLA__SECTION__KEY=value.
-
-    Nesting is expressed with a double underscore. Matching is case
-    insensitive against the lowercase YAML keys; the resulting value is
-    parsed as YAML scalar so booleans/ints/floats round-trip correctly.
-    """
+    """Overlay ``BELLA__SECTION__KEY=value`` environment variables."""
     result = data
 
-    def set_path(d: dict, keys: list[str], value: Any) -> None:
-        cur = d
-        for k in keys[:-1]:
-            nxt = cur.get(k)
-            if not isinstance(nxt, dict):
-                nxt = {}
-                cur[k] = nxt
-            cur = nxt
-        cur[keys[-1]] = value
+    def set_path(mapping: dict, keys: list[str], value: Any) -> None:
+        current = mapping
+        for key in keys[:-1]:
+            next_value = current.get(key)
+            if not isinstance(next_value, dict):
+                next_value = {}
+                current[key] = next_value
+            current = next_value
+        current[keys[-1]] = value
 
     env_prefix = f"{prefix}{ENV_NEST_SEP}"
     for env_name, raw_value in os.environ.items():
@@ -98,7 +92,7 @@ def _apply_env_overrides(data: dict, prefix: str = ENV_PREFIX) -> dict:
 
 
 def resolve_api_key(backend_config: dict) -> str | None:
-    """Resolve a backend's API key exclusively from its api_key_env variable."""
+    """Resolve a backend API key exclusively from its named environment variable."""
     env_var = backend_config.get("api_key_env")
     if not env_var:
         return None
@@ -106,25 +100,30 @@ def resolve_api_key(backend_config: dict) -> str | None:
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """Load configuration from YAML, validate, and apply env var overrides."""
+    """Load YAML configuration, validate, and apply environment overrides."""
     config_path = Path(path) if path else DEFAULT_CONFIG_PATH
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    with open(config_path, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
 
     if not isinstance(data, dict):
-        raise ConfigError(f"Config file must contain a YAML mapping at the top level: {config_path}")
+        raise ConfigError(
+            f"Config file must contain a YAML mapping at the top level: {config_path}"
+        )
 
     _reject_literal_secrets(data)
     data = _apply_env_overrides(data)
-    _reject_literal_secrets(data)  # re-check in case an override injected one
-
+    _reject_literal_secrets(data)
     return data
 
 
 def get_enabled_backends(config: dict) -> list[str]:
-    """Return backend names with enabled: true, in config file order."""
+    """Return enabled backend names in configuration order."""
     backends = config.get("backends", {}) or {}
-    return [name for name, cfg in backends.items() if isinstance(cfg, dict) and cfg.get("enabled")]
+    return [
+        name
+        for name, backend_config in backends.items()
+        if isinstance(backend_config, dict) and backend_config.get("enabled")
+    ]
