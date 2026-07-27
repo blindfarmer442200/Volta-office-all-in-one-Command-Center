@@ -13,7 +13,10 @@ from bella_harness.action_gate import (
     ActionSpec,
     ActionValidationError,
 )
+from bella_harness.backends import BackendAbstraction, BackendError
+from bella_harness.config import load_config
 from bella_harness.deterministic.engine import Action
+from bella_harness.evaluation import BellaEvaluationGate, EvaluationError
 from bella_harness.harness import BellaHarness
 from bella_harness.operator import BellaMode
 
@@ -165,6 +168,68 @@ def sandbox_action(
             }
         click.echo(json.dumps(output, ensure_ascii=False, sort_keys=True))
     except (ActionGateError, ActionValidationError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("evaluate-bella")
+@click.option(
+    "--backend",
+    type=click.Choice(["ollama"], case_sensitive=False),
+    default="ollama",
+    show_default=True,
+    help="Pinned local backend. Cloud fallback is intentionally unavailable.",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Exact Ollama model tag. Defaults to backends.ollama.model in config.",
+)
+@click.option(
+    "--report",
+    "report_path",
+    default="bella-evaluation-report.json",
+    show_default=True,
+    help="Path for the hashed JSON evaluation report.",
+)
+@click.pass_context
+def evaluate_bella(
+    ctx: click.Context,
+    backend: str,
+    model: str | None,
+    report_path: str,
+) -> None:
+    """Run all mandatory synthetic behavior scenarios against one Ollama model."""
+    try:
+        config = load_config(ctx.obj.get("config_path"))
+        evaluation_config = config.get("evaluation", {}) or {}
+        if not evaluation_config.get("enabled", True):
+            raise EvaluationError("Bella evaluation is disabled in configuration")
+        configured_backend = evaluation_config.get("backend", "ollama")
+        if configured_backend != "ollama" or backend.lower() != "ollama":
+            raise EvaluationError("Bella evaluation must remain pinned to local Ollama")
+
+        backends = BackendAbstraction(config)
+        try:
+            selected_backend = backends.get("ollama")
+        except KeyError as exc:
+            raise EvaluationError("the Ollama backend is not enabled in configuration") from exc
+
+        selected_model = model or evaluation_config.get("model") or selected_backend.model
+        gate = BellaEvaluationGate(
+            selected_backend,
+            backend_name="ollama",
+            model=selected_model,
+        )
+        report = gate.run()
+        gate.write_report(report, report_path)
+        click.echo(
+            f"{report.passed_count}/{report.total} mandatory scenarios passed; "
+            f"accepted={str(report.accepted).lower()}; model={report.model}; "
+            f"report={report_path}; sha256={report.report_sha256}"
+        )
+        if not report.accepted:
+            sys.exit(1)
+    except (EvaluationError, BackendError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
 
