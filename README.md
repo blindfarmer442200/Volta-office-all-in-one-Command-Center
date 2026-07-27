@@ -21,6 +21,8 @@ zero-inference gate in front of the model:
   injection attempts, and more) without ever calling an LLM.
 - **Answers directly** for a slice of deterministic requests (greetings,
   arithmetic) with no model call at all.
+- **Recalls approved memory only after the gate defers**, so blocked requests
+  never touch Mind Trace and memory remains reference data, not authority.
 - **Defers** everything else to an LLM backend, so the gate never becomes a
   bottleneck for legitimate requests it can't confidently classify.
 - **Scans the model's output** on the way back, withholding responses that
@@ -43,6 +45,27 @@ PYTHONPATH=src python -m bella_harness.cli ask "What's the capital of France?"
 # Run the red-team suite (fully offline, no backend or API keys)
 PYTHONPATH=src:. python -m bella_harness.cli redteam
 ```
+
+## Mind Trace memory
+
+Mind Trace is the bounded, human-governed memory seam inside the harness. It is
+reached only after the deterministic input gate returns `DEFER_TO_LLM`.
+Blocked requests and direct deterministic answers never read memory.
+
+The first integration is deliberately read-only:
+
+- only approved, current, non-superseded records can reach a model;
+- private records are excluded in Customer mode;
+- instruction-like memory is rejected by the deterministic gate;
+- the prompt labels memory as untrusted JSON data, never instructions;
+- memory cannot authorize email, deletion, payment, publishing, scheduling,
+  account changes, device control, or any other external action;
+- malformed configured stores fail closed by default;
+- irrelevant or empty recall leaves the original request unchanged.
+
+With `memory.store_path: null` the harness uses an empty store, preserving
+backward-compatible behavior. See [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md)
+for the JSONL format and security invariants.
 
 ## Backends
 
@@ -68,7 +91,9 @@ error at load time.
 
 ## Docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- how the deterministic engine, backend
-  abstraction, and red-team suite fit together.
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- how the deterministic engine, memory
+  boundary, backend abstraction, and red-team suite fit together.
+- [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) -- approved-memory
+  format, request flow, and security invariants.
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- how to add a rule, backend, or probe.
 - [CLAUDE.md](CLAUDE.md) -- handoff notes for Claude Code.
