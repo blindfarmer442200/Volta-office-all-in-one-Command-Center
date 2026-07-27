@@ -7,7 +7,7 @@ import json
 import click
 
 from bella_harness.config import ConfigError, load_config
-from bella_harness.doctor import run_doctor
+from bella_harness.service.doctor import run_service_doctor
 
 
 @click.command("doctor")
@@ -26,7 +26,7 @@ from bella_harness.doctor import run_doctor
 def doctor_command(ctx: click.Context, live: bool, as_json: bool) -> None:
     """Audit Bella's installed production configuration and local stores."""
     try:
-        report = run_doctor(load_config(ctx.obj.get("config_path")), live=live)
+        report = run_service_doctor(load_config(ctx.obj.get("config_path")), live=live)
     except (ConfigError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
