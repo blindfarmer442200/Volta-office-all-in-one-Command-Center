@@ -12,9 +12,13 @@ class PrivateEndpointError(ValueError):
 
 
 def _allowed_private_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    # Some Python/ipaddress versions classify IPv6 ::1 as reserved. Loopback is
+    # still safe and must be accepted before the broader reserved-address block.
+    if address.is_loopback:
+        return True
     if address.is_unspecified or address.is_multicast or address.is_reserved:
         return False
-    return address.is_loopback or address.is_private or address.is_link_local
+    return address.is_private or address.is_link_local
 
 
 def normalize_private_http_base_url(value: str) -> str:
