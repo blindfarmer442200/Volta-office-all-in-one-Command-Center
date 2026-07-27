@@ -20,6 +20,11 @@ class OllamaBackend(Backend):
             "prompt": prompt,
             "stream": False,
         }
+        if "temperature" in kwargs:
+            temperature = kwargs["temperature"]
+            if not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
+                raise BackendError("ollama temperature must be a number between 0 and 2")
+            payload["options"] = {"temperature": float(temperature)}
         try:
             resp = httpx.post(
                 f"{self.base_url}/api/generate",

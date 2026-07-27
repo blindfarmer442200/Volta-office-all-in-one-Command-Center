@@ -21,6 +21,8 @@ bella-harness puts fast, auditable, zero-inference boundaries around the model:
   identity, mode, risk, accessibility, uncertainty, and approval rules.
 - **Separates plans from actions** through an exact, expiring, one-use Action
   Gate limited to a local side-effect-free sandbox.
+- **Rejects unproven candidate models** through an Ollama-only, all-or-nothing
+  18-scenario Bella Evaluation Gate.
 - **Defers** legitimate response generation to the configured LLM backend.
 - **Scans model output** and withholds leaked credentials or system-prompt
   canaries before the response reaches the user.
@@ -47,6 +49,11 @@ PYTHONPATH=src python -m bella_harness.cli sandbox-action \
   --target customer@example.com \
   --payload '{"subject":"Invoice","body":"Invoice 1042 is overdue."}' \
   --mode business
+
+# Evaluate one pinned local Ollama model. Exit code is nonzero unless all 18 pass.
+PYTHONPATH=src python -m bella_harness.cli evaluate-bella \
+  --model qwen3.5 \
+  --report bella-evaluation-report.json
 
 # Run the red-team suite fully offline
 PYTHONPATH=src:. python -m bella_harness.cli redteam
@@ -111,6 +118,32 @@ The CLI proof can preview or, with `--confirm`, consume the capability inside
 the mock sandbox. It never displays the raw capability and cannot contact an
 outside service. See [docs/ACTION_GATE.md](docs/ACTION_GATE.md).
 
+## Bella Evaluation Gate
+
+The Evaluation Gate tests one exact local Ollama model against 18 mandatory,
+synthetic behavior scenarios before the model may be considered a Bella
+candidate. The suite covers:
+
+- personal support without business drift;
+- missing-memory honesty and unreviewed information;
+- Customer-mode privacy;
+- destructive actions, money, calendar, credentials, and files;
+- medication changes;
+- Quiet-mode brevity;
+- stored prompt-injection resistance;
+- unsolicited faith language;
+- accessibility for low vision and voice use;
+- remembered approval versus current permission;
+- draft versus send and false-completion claims.
+
+The model must return a strict JSON response contract. The gate uses Bella's
+real operator envelope, sends no personal memory or real credentials, never
+falls back to cloud, never activates a model automatically, and never grants
+permissions. A score of 17/18 still fails. The resulting JSON report is bound
+to its model, profile, results, counts, acceptance state, and SHA-256 digest.
+
+See [docs/BELLA_EVALUATION_GATE.md](docs/BELLA_EVALUATION_GATE.md).
+
 ## Backends
 
 One interface (`BackendAbstraction`) covers four backends configured in
@@ -132,12 +165,15 @@ API keys are only read from environment variables named by each backend's
 
 ## Docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request and action flows.
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request, action, and model
+  acceptance flows.
 - [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) -- approved-memory
   format and security invariants.
 - [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md) -- identity, modes, risk,
   approval, and completion-claim rules.
 - [docs/ACTION_GATE.md](docs/ACTION_GATE.md) -- exact preview, authorization,
   replay protection, sandbox execution, and future connector requirements.
+- [docs/BELLA_EVALUATION_GATE.md](docs/BELLA_EVALUATION_GATE.md) -- mandatory
+  behavior scenarios, report integrity, and local model acceptance.
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- adding a rule, backend, or probe.
 - [CLAUDE.md](CLAUDE.md) -- handoff notes for Claude Code.
