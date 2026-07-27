@@ -83,6 +83,9 @@ backends:
     # Only localhost or a literal loopback/private IP is accepted. Public hosts,
     # DNS names, redirects, credentials, and URL path prefixes fail closed.
     base_url: http://localhost:11434
+    # Loopback may use HTTP. A remote private IP must use HTTPS unless this is
+    # explicitly enabled for an encrypted VPN or isolated trusted LAN.
+    allow_insecure_private_http: false
     # Pull with: ollama pull qwen3:3.5b  (adjust the tag to the Qwen 3.5
     # variant you have pulled locally, e.g. qwen3:1.7b / qwen3:8b).
     model: qwen3.5
