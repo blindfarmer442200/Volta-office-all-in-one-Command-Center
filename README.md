@@ -27,6 +27,24 @@ zero-inference gate in front of the model:
   leak credentials or the system prompt — so the harness guards both the
   request *and* the reply, not just the input.
 
+## Mind Trace memory
+
+Mind Trace adds optional, read-only, human-governed memory without creating a
+second Bella runtime. It runs only after the deterministic gate chooses
+`DEFER_TO_LLM`:
+
+- blocked and deterministic-answerable requests never read memory;
+- only approved, current, non-superseded memories may reach a model;
+- customer mode excludes private memories;
+- memory text is scanned by the existing deterministic engine before use;
+- memory is labeled as untrusted reference data, never instructions;
+- memory cannot grant permission for any external action;
+- broken configured stores fail closed by default;
+- empty or irrelevant recall leaves the original request unchanged.
+
+See [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) for the record format,
+configuration, request flow, and security invariants.
+
 ## Quickstart
 
 ```bash
@@ -50,7 +68,7 @@ One interface (`BackendAbstraction`) over four backends, configured in
 `config/default.yaml`:
 
 | Backend    | Default model            | Notes                                    |
-|------------|--------------------------|-------------------------------------------|
+|------------|--------------------------|------------------------------------------|
 | Ollama     | `qwen3.5`                | Local-first, no API key required (default) |
 | OpenAI     | `gpt-4o-mini`            | `OPENAI_API_KEY`                          |
 | Anthropic  | `claude-3-5-sonnet-latest` | `ANTHROPIC_API_KEY`                     |
@@ -70,5 +88,7 @@ error at load time.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) -- how the deterministic engine, backend
   abstraction, and red-team suite fit together.
+- [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) -- approved-memory
+  filtering, context construction, and security boundaries.
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- how to add a rule, backend, or probe.
 - [CLAUDE.md](CLAUDE.md) -- handoff notes for Claude Code.
