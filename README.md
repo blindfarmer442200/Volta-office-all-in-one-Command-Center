@@ -13,36 +13,35 @@ every PR (no live model required).
 
 Relying solely on an LLM's own alignment training to refuse attacks means
 every request pays the latency/cost of a model call, and safety is only as
-good as that one model's training. bella-harness puts a fast, auditable,
-zero-inference gate in front of the model:
+good as that one model's training. bella-harness puts fast, auditable,
+zero-inference boundaries around the model:
 
-- **Blocks** known attack patterns (prompt injection, jailbreaks, privilege
-  escalation, data exfiltration, encoded/obfuscated payloads, translated
-  injection attempts, and more) without ever calling an LLM.
-- **Answers directly** for a slice of deterministic requests (greetings,
-  arithmetic) with no model call at all.
+- **Blocks** known attack patterns before any memory or model access.
+- **Answers directly** for greetings and arithmetic with no model call.
 - **Recalls approved memory only after the gate defers**, so blocked requests
-  never touch Mind Trace and memory remains reference data, not authority.
-- **Defers** everything else to an LLM backend, so the gate never becomes a
-  bottleneck for legitimate requests it can't confidently classify.
-- **Scans the model's output** on the way back, withholding responses that
-  leak credentials or the system prompt — so the harness guards both the
-  request *and* the reply, not just the input.
+  never touch Mind Trace and memory remains evidence, not authority.
+- **Applies Bella Operator outside the model**, giving every backend the same
+  identity, mode, risk, accessibility, uncertainty, and approval rules.
+- **Defers** legitimate requests to the configured LLM backend.
+- **Scans the model's output** and withholds leaked credentials or system-prompt
+  canaries before the response reaches the user.
 
 ## Quickstart
 
 ```bash
 pip install -r requirements.txt
 
-# Requests the deterministic engine resolves on its own -- no backend needed
-PYTHONPATH=src python -m bella_harness.cli ask "hello"          # -> greeting
-PYTHONPATH=src python -m bella_harness.cli ask "2 + 2"          # -> 4
+# Deterministic responses -- no backend required
+PYTHONPATH=src python -m bella_harness.cli ask "hello"
+PYTHONPATH=src python -m bella_harness.cli ask "2 + 2"
 
-# A free-form question defers to an LLM backend, so start Ollama first
-# (see Backends below); without a reachable backend it fails closed.
-PYTHONPATH=src python -m bella_harness.cli ask "What's the capital of France?"
+# Free-form requests use Ollama or another configured backend
+PYTHONPATH=src python -m bella_harness.cli ask \
+  --mode business \
+  --json \
+  "Draft an email to the customer"
 
-# Run the red-team suite (fully offline, no backend or API keys)
+# Run the red-team suite fully offline
 PYTHONPATH=src:. python -m bella_harness.cli redteam
 ```
 
@@ -57,43 +56,62 @@ The first integration is deliberately read-only:
 - only approved, current, non-superseded records can reach a model;
 - private records are excluded in Customer mode;
 - instruction-like memory is rejected by the deterministic gate;
-- the prompt labels memory as untrusted JSON data, never instructions;
+- memory is labeled as untrusted JSON data, never instructions;
 - memory cannot authorize email, deletion, payment, publishing, scheduling,
   account changes, device control, or any other external action;
 - malformed configured stores fail closed by default;
 - irrelevant or empty recall leaves the original request unchanged.
 
-With `memory.store_path: null` the harness uses an empty store, preserving
-backward-compatible behavior. See [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md)
-for the JSONL format and security invariants.
+With `memory.store_path: null` the harness uses an empty store. See
+[docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md).
+
+## Bella Operator
+
+Bella Operator is the model-independent assistant layer inside the harness.
+The shipped configuration enables it before backend generation and after the
+input gate has deferred the request.
+
+It provides:
+
+- the fixed `bella-core-v1` identity;
+- Default, Life, Home, Business, Technical, Care, Developer, Customer, and
+  Quiet modes;
+- deterministic Low, Medium, High, and Critical consequence classification;
+- visible plans for consequential requests;
+- explicit current-approval requirements for High and Critical requests;
+- accessibility and uncertainty rules;
+- a hard rule that plans and memories are not execution authority;
+- a hard rule that completed-action claims require verified tool results.
+
+Operator metadata is returned by `bella ask --json`, including the active mode,
+risk level, approval requirement, reasons, and visible plan. See
+[docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md).
 
 ## Backends
 
-One interface (`BackendAbstraction`) over four backends, configured in
+One interface (`BackendAbstraction`) covers four backends configured in
 `config/default.yaml`:
 
-| Backend    | Default model            | Notes                                    |
-|------------|--------------------------|-------------------------------------------|
-| Ollama     | `qwen3.5`                | Local-first, no API key required (default) |
-| OpenAI     | `gpt-4o-mini`            | `OPENAI_API_KEY`                          |
-| Anthropic  | `claude-3-5-sonnet-latest` | `ANTHROPIC_API_KEY`                     |
-| OpenRouter | `meta-llama/llama-3.1-70b-instruct` | `OPENROUTER_API_KEY`           |
+| Backend | Default model | Notes |
+|---|---|---|
+| Ollama | `qwen3.5` | Local-first, no API key required |
+| OpenAI | `gpt-4o-mini` | `OPENAI_API_KEY` |
+| Anthropic | `claude-3-5-sonnet-latest` | `ANTHROPIC_API_KEY` |
+| OpenRouter | `meta-llama/llama-3.1-70b-instruct` | `OPENROUTER_API_KEY` |
 
 The default Ollama model is Qwen 3.5. Pull it locally with
-`ollama pull qwen3.5` (or point `backends.ollama.model` at whichever Qwen 3.5
-tag you have), then start the Ollama server before deferring any request to
-it. Override without editing config via
+`ollama pull qwen3.5`, start Ollama, or override the tag with
 `BELLA__BACKENDS__OLLAMA__MODEL=<tag>`.
 
-API keys are **only** ever read from environment variables named by each
-backend's `api_key_env` setting -- a literal key in a config file is a hard
-error at load time.
+API keys are only read from environment variables named by each backend's
+`api_key_env` setting. A literal secret in configuration is a hard error.
 
 ## Docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- how the deterministic engine, memory
-  boundary, backend abstraction, and red-team suite fit together.
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request flow and boundaries.
 - [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) -- approved-memory
-  format, request flow, and security invariants.
-- [CONTRIBUTING.md](CONTRIBUTING.md) -- how to add a rule, backend, or probe.
+  format and security invariants.
+- [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md) -- identity, modes, risk,
+  approval, and completion-claim rules.
+- [CONTRIBUTING.md](CONTRIBUTING.md) -- adding a rule, backend, or probe.
 - [CLAUDE.md](CLAUDE.md) -- handoff notes for Claude Code.
