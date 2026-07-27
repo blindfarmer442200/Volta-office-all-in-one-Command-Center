@@ -11,8 +11,12 @@ _CRITICAL_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "money movement or purchase",
         re.compile(
-            r"\b(transfer|wire|send|move|pay|purchase|buy|refund|charge)\b"
-            r".{0,40}\b(money|funds?|payment|bank|card|crypto|invoice|dollars?|\$)\b",
+            r"(?:"
+            r"\b(transfer|wire|send|move|pay)\b.{0,40}\$\s*\d"
+            r"|\b(transfer|wire|move)\b.{0,40}\b(money|funds?|bank|crypto|dollars?)\b"
+            r"|\bsend\b.{0,40}\b(money|funds?|crypto|dollars?)\b"
+            r"|\b(pay|purchase|buy|refund|charge)\b.{0,40}\b(invoice|bill|money|funds?|payment|bank|card|crypto|dollars?)\b"
+            r")",
             re.IGNORECASE,
         ),
     ),
@@ -55,7 +59,7 @@ _HIGH_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "external communication",
         re.compile(
             r"\b(send|email|message|text|call|forward|post|publish|submit)\b"
-            r".{0,50}\b(customer|client|person|them|him|her|team|boss|employee|public|social|form|application|email|message|text)\b",
+            r".{0,50}\b(customer|client|person|them|him|her|team|boss|employee|public|social|form|application|email|message|text|invoice|reminder|notice)\b",
             re.IGNORECASE,
         ),
     ),
@@ -97,7 +101,7 @@ _MEDIUM_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "draft or preview of a consequential action",
         re.compile(
             r"\b(draft|prepare|preview|propose|review)\b"
-            r".{0,50}\b(email|message|contract|agreement|payment|calendar|filing|application|record)",
+            r".{0,50}\b(email|message|contract|agreement|payment|calendar|filing|application|record|invoice|reminder|notice)\b",
             re.IGNORECASE,
         ),
     ),
