@@ -32,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--dependency-audit-passed", action="store_true")
     build.add_argument("--distribution-check-passed", action="store_true")
     build.add_argument("--wheel-smoke-passed", action="store_true")
+    build.add_argument("--container-smoke-passed", action="store_true")
 
     verify = subparsers.add_parser("verify", help="Verify a release manifest and artifacts.")
     verify.add_argument("--manifest", default="release-manifest.json")
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
                 dependency_audit_passed=args.dependency_audit_passed,
                 distribution_check_passed=args.distribution_check_passed,
                 wheel_smoke_passed=args.wheel_smoke_passed,
+                container_smoke_passed=args.container_smoke_passed,
             )
             print(
                 json.dumps(
