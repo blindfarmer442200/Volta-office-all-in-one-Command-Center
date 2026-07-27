@@ -77,11 +77,16 @@ deterministic:
 backends:
   ollama:
     enabled: true
+    # Only localhost or a literal loopback/private IP is accepted. Public hosts,
+    # DNS names, redirects, credentials, and URL path prefixes fail closed.
     base_url: http://localhost:11434
     # Pull with: ollama pull qwen3:3.5b  (adjust the tag to the Qwen 3.5
     # variant you have pulled locally, e.g. qwen3:1.7b / qwen3:8b).
     model: qwen3.5
     timeout_seconds: 60
+    max_prompt_chars: 128000
+    max_response_bytes: 1000000
+    max_output_chars: 200000
 
   openai:
     enabled: false
