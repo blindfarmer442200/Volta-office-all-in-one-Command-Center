@@ -81,14 +81,17 @@ private memory contents, tuning responses, credentials, or capabilities.
 
 The Ollama adapter accepts only:
 
-- `localhost`;
-- literal loopback IP addresses;
-- literal private or link-local IP addresses.
+- `localhost` or literal loopback IP addresses over HTTP or HTTPS;
+- literal private or link-local IP addresses over HTTPS;
+- literal private or link-local IP addresses over HTTP only when
+  `allow_insecure_private_http` is explicitly enabled for an encrypted VPN or
+  isolated trusted LAN.
 
 It rejects:
 
 - public IP addresses;
 - arbitrary DNS hostnames;
+- unapproved plain HTTP to a remote private IP;
 - credentials embedded in URLs;
 - URL path prefixes, queries, and fragments;
 - redirects;
@@ -98,7 +101,17 @@ It rejects:
 - missing response text;
 - invalid model tags and temperatures.
 
-Use a VPN or private network address when Ollama runs on another trusted host.
+Prefer loopback or HTTPS. When a trusted VPN or isolated LAN is the transport and
+Ollama cannot terminate TLS directly, the operator may explicitly opt in:
+
+```bash
+export BELLA__BACKENDS__OLLAMA__BASE_URL=http://192.168.1.20:11434
+export BELLA__BACKENDS__OLLAMA__ALLOW_INSECURE_PRIVATE_HTTP=true
+bella doctor --live
+```
+
+That flag is an operator acceptance of transport risk; it is not proof that the
+network is encrypted. Never enable it for a public, shared, or untrusted network.
 Do not expose Ollama directly to the public internet.
 
 ## Required release gates
