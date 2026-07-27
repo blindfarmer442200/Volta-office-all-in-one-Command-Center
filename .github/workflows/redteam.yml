@@ -23,7 +23,17 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run unit tests
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee pytest-output.txt
+
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output-py${{ matrix.python-version }}
+          path: pytest-output.txt
 
       - name: Run red-team probe suite
         run: PYTHONPATH=src:. python -m bella_harness.cli redteam --report redteam-report.json
