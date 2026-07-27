@@ -133,6 +133,8 @@ class ServiceSettings:
     request_timeout_seconds: float
     rate_limit_requests: int
     rate_limit_window_seconds: int
+    auth_failure_limit_requests: int
+    auth_failure_limit_window_seconds: int
     trusted_hosts: tuple[str, ...]
     log_level: str
 
@@ -218,6 +220,18 @@ class ServiceSettings:
             rate_limit_window_seconds=_bounded_int(
                 raw.get("rate_limit_window_seconds", 60),
                 name="rate_limit_window_seconds",
+                minimum=1,
+                maximum=3_600,
+            ),
+            auth_failure_limit_requests=_bounded_int(
+                raw.get("auth_failure_limit_requests", 20),
+                name="auth_failure_limit_requests",
+                minimum=1,
+                maximum=10_000,
+            ),
+            auth_failure_limit_window_seconds=_bounded_int(
+                raw.get("auth_failure_limit_window_seconds", 60),
+                name="auth_failure_limit_window_seconds",
                 minimum=1,
                 maximum=3_600,
             ),
