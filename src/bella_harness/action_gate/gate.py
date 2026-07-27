@@ -17,6 +17,7 @@ from bella_harness.action_gate.models import (
     ActionAuthorization,
     ActionExecution,
     ActionGateError,
+    ActionKind,
     ActionPreview,
     ActionSpec,
     ActionStatus,
@@ -29,6 +30,20 @@ from bella_harness.operator import OperatorDecision
 Clock = Callable[[], datetime]
 TokenFactory = Callable[[], str]
 IdFactory = Callable[[], str]
+
+_REASON_ACTION_KINDS: dict[str, frozenset[ActionKind]] = {
+    "external communication": frozenset({ActionKind.SEND_MESSAGE}),
+    "calendar or reservation change": frozenset({ActionKind.CALENDAR_CHANGE}),
+    "external file, account, or record change": frozenset({ActionKind.FILE_CHANGE}),
+    "legal or business commitment": frozenset({ActionKind.SEND_MESSAGE}),
+    "money movement or purchase": frozenset({ActionKind.PAYMENT}),
+    "credential or secret change": frozenset({ActionKind.ACCOUNT_CHANGE}),
+    "destructive data or account action": frozenset(
+        {ActionKind.FILE_CHANGE, ActionKind.ACCOUNT_CHANGE}
+    ),
+    "medication change": frozenset(),
+    "safety-sensitive physical control": frozenset({ActionKind.DEVICE_CONTROL}),
+}
 
 
 def _utc_now() -> datetime:
@@ -52,6 +67,17 @@ def _capability_hash(capability: str) -> str:
     return hashlib.sha256(capability.encode("utf-8")).hexdigest()
 
 
+def _decision_allows_kind(decision: OperatorDecision, kind: ActionKind) -> bool:
+    allowed: set[ActionKind] = set()
+    recognized = False
+    for reason in decision.reasons:
+        reason_kinds = _REASON_ACTION_KINDS.get(reason)
+        if reason_kinds is not None:
+            recognized = True
+            allowed.update(reason_kinds)
+    return recognized and kind in allowed
+
+
 @dataclass
 class _PreviewState:
     preview: ActionPreview
@@ -62,9 +88,8 @@ class _PreviewState:
 class ActionGate:
     """In-memory Action Gate for a side-effect-free mock connector.
 
-    Raw capabilities are returned once to the caller and never retained. Only a
-    SHA-256 digest is stored for one-time verification. This class deliberately
-    supports no email, calendar, payment, file, account, or device connector.
+    Raw capabilities are returned once and never retained. Only a SHA-256 digest
+    is stored for one-use verification. No real connector is supported.
     """
 
     def __init__(
@@ -139,7 +164,11 @@ class ActionGate:
         return state
 
     def _expire_if_needed(self, state: _PreviewState) -> None:
-        if state.preview.status in {ActionStatus.EXECUTED, ActionStatus.REVOKED, ActionStatus.EXPIRED}:
+        if state.preview.status in {
+            ActionStatus.EXECUTED,
+            ActionStatus.REVOKED,
+            ActionStatus.EXPIRED,
+        }:
             return
         now = self._now()
         preview_deadline = _parse_iso(state.preview.expires_at)
@@ -160,7 +189,7 @@ class ActionGate:
             self._append_audit("action_expired", state.preview.id)
 
     def prepare(self, spec: ActionSpec, decision: OperatorDecision) -> ActionPreview:
-        """Create an exact preview only for an approval-gated operator decision."""
+        """Create an exact preview only for a matching approval-gated decision."""
         with self._lock:
             if spec.connector != MOCK_CONNECTOR:
                 raise ActionGateError("only the mock action sandbox is supported")
@@ -173,6 +202,10 @@ class ActionGate:
                 raise ActionGateError(
                     f"operator risk {decision.risk_level.value!r} is below the "
                     f"{spec.required_risk.value!r} floor for {spec.kind.value!r}"
+                )
+            if not _decision_allows_kind(decision, spec.kind):
+                raise ActionGateError(
+                    f"operator reason does not authorize action kind {spec.kind.value!r}"
                 )
 
             now = self._now()
@@ -205,6 +238,7 @@ class ActionGate:
                     "kind": spec.kind.value,
                     "connector": spec.connector,
                     "risk_level": decision.risk_level.value,
+                    "operator_reasons": list(decision.reasons),
                 },
             )
             return preview
@@ -290,7 +324,6 @@ class ActionGate:
             ):
                 raise ActionGateError("invalid one-time capability")
 
-            # Consume before constructing the result so retries cannot replay.
             state.token_hash = None
             state.authorization_expires_at = None
             state.preview = replace(state.preview, status=ActionStatus.EXECUTED)
