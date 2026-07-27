@@ -1,15 +1,23 @@
-"""The orchestrator: deterministic gate, Mind Trace recall, Bella operator, backend.
+"""Bella orchestration: deterministic gate, operator, memory, backend, actions.
 
-Memory and operator context are intentionally inserted only after the input gate
+Memory and operator context are inserted only after the deterministic input gate
 defers a request to an LLM. Blocked and deterministic-answerable requests never
-read the memory store or build a model prompt. The model response still passes
-through output scanning before return.
+read memory or build a model prompt. Consequential actions use a separate exact
+Action Gate API and cannot execute through the ordinary response path.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from bella_harness.action_gate import (
+    ActionAuthorization,
+    ActionExecution,
+    ActionGate,
+    ActionGateError,
+    ActionPreview,
+    ActionSpec,
+)
 from bella_harness.backends import BackendAbstraction, BackendError
 from bella_harness.config import load_config
 from bella_harness.deterministic.engine import Action, DeterministicEngine
@@ -66,12 +74,12 @@ class HarnessResult:
 
 
 class BellaHarness:
-    """Deterministic-first request handler with memory and operator boundaries.
+    """Deterministic-first assistant with memory, operator, and action boundaries.
 
-    The deterministic engine remains the first and last security boundary. Mind
-    Trace is a read-only context source. BellaOperator adds model-independent
-    identity, mode, risk, accessibility, and approval policy. Neither memory nor
-    an operator plan can grant action authority.
+    Mind Trace is read-only context. BellaOperator adds model-independent
+    identity, mode, risk, accessibility, and approval policy. ActionGate is a
+    separate exact-preview protocol limited to a local side-effect-free sandbox.
+    None of these layers allow memory or a model response to grant authority.
     """
 
     def __init__(
@@ -86,6 +94,7 @@ class BellaHarness:
         self._memory_store_override = memory_store
         self._memory: MindTraceMemoryService | None = None
         self._operator: BellaOperator | None = None
+        self._action_gate: ActionGate | None = None
 
     @property
     def backends(self) -> BackendAbstraction:
@@ -122,12 +131,10 @@ class BellaHarness:
         return bool(self._memory_config.get("fail_closed", True))
 
     def _memory_content_is_safe(self, content: str) -> bool:
-        """Reject memory text that the deterministic input gate classifies BLOCK."""
         return self.deterministic_engine.evaluate(content).action != Action.BLOCK
 
     @property
     def memory(self) -> MindTraceMemoryService:
-        """Lazily construct memory so blocked requests cannot touch its store."""
         if self._memory is None:
             cfg = self._memory_config
             if self._memory_store_override is not None:
@@ -152,8 +159,6 @@ class BellaHarness:
 
     @property
     def operator_enabled(self) -> bool:
-        # Minimal injected test configs from older callers remain backward
-        # compatible unless they opt in. The shipped default.yaml enables it.
         return bool(self._operator_config.get("enabled", False))
 
     @property
@@ -161,6 +166,83 @@ class BellaHarness:
         if self._operator is None:
             self._operator = BellaOperator()
         return self._operator
+
+    @property
+    def _action_gate_config(self) -> dict:
+        return self.config.get("action_gate", {}) or {}
+
+    @property
+    def action_gate_enabled(self) -> bool:
+        # Legacy embedded configs remain unchanged unless they opt in. The
+        # shipped default config enables only the local mock sandbox.
+        return bool(self._action_gate_config.get("enabled", False))
+
+    @property
+    def action_gate(self) -> ActionGate:
+        if not self.action_gate_enabled:
+            raise ActionGateError("Action Gate is disabled")
+        if self._action_gate is None:
+            cfg = self._action_gate_config
+            self._action_gate = ActionGate(
+                preview_ttl_seconds=int(cfg.get("preview_ttl_seconds", 15 * 60)),
+                authorization_ttl_seconds=int(
+                    cfg.get("authorization_ttl_seconds", 5 * 60)
+                ),
+            )
+        return self._action_gate
+
+    def prepare_action(
+        self,
+        request_text: str,
+        spec: ActionSpec,
+        *,
+        mode: str = "default",
+    ) -> ActionPreview:
+        """Create an exact sandbox preview through deterministic policy only."""
+        input_decision = self.deterministic_engine.evaluate(request_text)
+        if input_decision.action == Action.BLOCK:
+            raise ActionGateError("blocked requests cannot create action previews")
+        if input_decision.action != Action.DEFER_TO_LLM:
+            raise ActionGateError(
+                "deterministic-answerable requests cannot be upgraded into actions"
+            )
+        if not self.operator_enabled:
+            raise ActionGateError("Bella Operator must be enabled before Action Gate use")
+        try:
+            operator_decision = self.operator.decide(request_text, mode=mode)
+        except OperatorValidationError as exc:
+            raise ActionGateError("invalid Bella operator mode") from exc
+        return self.action_gate.prepare(spec, operator_decision)
+
+    def authorize_action(
+        self,
+        preview_id: str,
+        fingerprint: str,
+        *,
+        owner_confirmed: bool,
+    ) -> ActionAuthorization:
+        return self.action_gate.authorize(
+            preview_id,
+            fingerprint,
+            owner_confirmed=owner_confirmed,
+        )
+
+    def execute_sandbox_action(
+        self,
+        preview_id: str,
+        spec: ActionSpec,
+        fingerprint: str,
+        capability: str,
+    ) -> ActionExecution:
+        return self.action_gate.execute_sandbox(
+            preview_id,
+            spec,
+            fingerprint,
+            capability,
+        )
+
+    def revoke_action(self, preview_id: str) -> ActionPreview:
+        return self.action_gate.revoke(preview_id)
 
     @staticmethod
     def _operator_result_fields(
@@ -197,7 +279,6 @@ class BellaHarness:
                 handled_deterministically=True,
             )
 
-        # DEFER_TO_LLM. Validate operator mode before reading memory.
         operator_decision: OperatorDecision | None = None
         selected_mode = mode
         if self.operator_enabled:
