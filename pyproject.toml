@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-bella = "bella_harness.cli:main"
+bella = "bella_harness.entrypoint:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
