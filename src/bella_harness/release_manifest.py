@@ -13,8 +13,11 @@ from typing import Any
 
 
 RELEASE_MANIFEST_SCHEMA = "bella.release-manifest.v1"
+MIN_UNIT_TESTS = 207
+MIN_REDTEAM_PROBES = 115
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
+_TAG_RE = re.compile(r"^v([0-9]+(?:\.[0-9]+){2}(?:[0-9A-Za-z.-]*)?)$")
 
 
 class ReleaseManifestError(RuntimeError):
@@ -82,6 +85,21 @@ def read_project_version(pyproject_path: str | Path) -> str:
     raise ReleaseManifestError("project version was not found in [project]")
 
 
+def validate_release_tag(tag: str, version: str) -> str:
+    """Require a canonical ``v<project-version>`` release tag."""
+    if not isinstance(tag, str) or not isinstance(version, str):
+        raise ReleaseManifestError("release tag and version must be strings")
+    match = _TAG_RE.fullmatch(tag.strip())
+    if match is None:
+        raise ReleaseManifestError("release tag must use canonical form vMAJOR.MINOR.PATCH")
+    tagged_version = match.group(1)
+    if tagged_version != version:
+        raise ReleaseManifestError(
+            f"release tag {tag!r} does not match project version {version!r}"
+        )
+    return tagged_version
+
+
 def _read_doctor_report(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -113,14 +131,23 @@ def build_release_manifest(
     """Validate release evidence, hash artifacts, and write atomic outputs."""
     if not isinstance(commit_sha, str) or not _COMMIT_RE.fullmatch(commit_sha):
         raise ReleaseManifestError("commit SHA must be 40 lowercase hexadecimal characters")
-    if not isinstance(unit_tests, int) or isinstance(unit_tests, bool) or unit_tests < 1:
-        raise ReleaseManifestError("unit test count must be a positive integer")
+    if (
+        not isinstance(unit_tests, int)
+        or isinstance(unit_tests, bool)
+        or unit_tests < MIN_UNIT_TESTS
+    ):
+        raise ReleaseManifestError(
+            f"unit test count must be at least the established baseline of {MIN_UNIT_TESTS}"
+        )
     if (
         not isinstance(redteam_probes, int)
         or isinstance(redteam_probes, bool)
-        or redteam_probes < 1
+        or redteam_probes < MIN_REDTEAM_PROBES
     ):
-        raise ReleaseManifestError("red-team probe count must be a positive integer")
+        raise ReleaseManifestError(
+            "red-team probe count must be at least the established baseline of "
+            f"{MIN_REDTEAM_PROBES}"
+        )
     for name, value in (
         ("dependency audit", dependency_audit_passed),
         ("distribution check", distribution_check_passed),
@@ -156,6 +183,11 @@ def build_release_manifest(
         raise ReleaseManifestError("source archive filename does not match project version")
 
     doctor = _read_doctor_report(Path(doctor_report_path))
+    if doctor.get("package_version") != version:
+        raise ReleaseManifestError(
+            "installed doctor package version does not match project version"
+        )
+
     file_records = []
     checksum_lines = []
     for artifact in artifacts:
@@ -179,7 +211,9 @@ def build_release_manifest(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "gates": {
             "unit_tests_passed": unit_tests,
+            "unit_tests_minimum": MIN_UNIT_TESTS,
             "redteam_probes_passed": redteam_probes,
+            "redteam_probes_minimum": MIN_REDTEAM_PROBES,
             "doctor_ready": True,
             "doctor_package_version": doctor.get("package_version"),
             "dependency_audit_passed": True,
@@ -217,6 +251,15 @@ def verify_release_manifest(
         if provided != expected:
             return False
         if manifest.get("schema") != RELEASE_MANIFEST_SCHEMA:
+            return False
+        gates = manifest.get("gates")
+        if not isinstance(gates, dict):
+            return False
+        if gates.get("unit_tests_passed", 0) < MIN_UNIT_TESTS:
+            return False
+        if gates.get("redteam_probes_passed", 0) < MIN_REDTEAM_PROBES:
+            return False
+        if gates.get("doctor_package_version") != manifest.get("version"):
             return False
         directory = Path(dist_dir)
         records = manifest.get("artifacts")
