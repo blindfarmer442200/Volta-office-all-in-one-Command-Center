@@ -105,8 +105,10 @@ class MemoryRecord:
 
         if not isinstance(self.private, bool):
             raise MemoryValidationError("private must be a boolean")
+        if not isinstance(self.tags, (list, tuple)):
+            raise MemoryValidationError("tags must be a list or tuple")
 
-        raw_tags = self.tags if isinstance(self.tags, tuple) else tuple(self.tags)
+        raw_tags = tuple(self.tags)
         if len(raw_tags) > MAX_TAGS:
             raise MemoryValidationError(f"memory may have at most {MAX_TAGS} tags")
         normalized_tags: list[str] = []
