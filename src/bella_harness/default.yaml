@@ -1,34 +1,20 @@
 # bella-harness default configuration
 #
-# API keys are NEVER read from this file. They are sourced exclusively from
-# environment variables (see backends.*.api_key_env below). Any literal secret
-# in configuration is rejected at load time.
+# API keys and service tokens are NEVER read from this file. They are sourced
+# exclusively from named environment variables. Literal secrets in configuration
+# are rejected.
 
 harness:
-  # Fraction-of-traffic target the deterministic engine aims to resolve
-  # without invoking an LLM backend. Informational only; actual routing is
-  # rule-driven, not sampled to hit this number.
   deterministic_target: 0.70
-  # Backend used when the deterministic engine defers to an LLM.
   default_backend: ollama
-  # A local backend failure must not silently send the request or recalled
-  # memory to a cloud provider. Set true only after explicit operator consent.
   allow_cloud_fallback: false
   fail_closed: true
-  # Output half of the harness: re-scan the model's response before returning
-  # it. Blocks responses that leak credentials or the system prompt.
   output_scanning:
     enabled: true
-    # Optional sentinel string placed in your system prompt. If it ever shows
-    # up in a model response, the system prompt leaked and the reply is blocked.
     canary: null
 
-# Mind Trace is reached only after the deterministic input gate has deferred a
-# request to an LLM. With no store_path it uses an empty in-memory store and
-# leaves the original request unchanged.
 memory:
   enabled: true
-  # A configured store that cannot be verified blocks the model call by default.
   fail_closed: true
   store_path: null
   max_results: 5
@@ -36,34 +22,23 @@ memory:
   max_context_chars: 6000
   max_memory_chars: 1200
 
-# Bella Operator adds fixed identity, mode directives, deterministic risk,
-# visible non-executing plans, and approval boundaries outside model weights.
 operator:
   enabled: true
-  # Supported modes: default, life, home, business, technical, care,
-  # developer, customer, quiet.
 
-# Action Gate is a separate exact-preview protocol. This release supports only
-# the local mock_action_sandbox and can never create outside side effects.
+# Action Gate remains local mock-only. The authenticated HTTP service does not
+# expose Action Gate endpoints.
 action_gate:
   enabled: true
   preview_ttl_seconds: 900
   authorization_ttl_seconds: 300
 
-# Evaluation is an all-or-nothing synthetic behavior gate for one pinned local
-# Ollama model. It never reads personal memory, falls back to cloud, changes the
-# active model, or grants tool permissions.
 evaluation:
   enabled: true
   backend: ollama
-  # null uses backends.ollama.model. Override explicitly when testing a candidate.
   model: null
   require_all: true
   report_path: bella-evaluation-report.json
 
-# Tuning is explicit and human reviewed. Normal `bella ask` requests are never
-# captured automatically. With store_path null, review/export commands require
-# --db. Redacted export is the default and nothing uploads or trains itself.
 tuning:
   enabled: true
   store_path: null
@@ -73,18 +48,34 @@ tuning:
   automatic_training: false
   automatic_model_activation: false
 
+# Disabled until the operator intentionally starts `bella serve`. Authentication
+# is always required for chat/readiness endpoints. Liveness exposes no private
+# state. Remote binding requires a second explicit setting.
+service:
+  enabled: false
+  host: 127.0.0.1
+  port: 8765
+  allow_remote_bind: false
+  token_env: BELLA_SERVICE_TOKEN
+  max_body_bytes: 65536
+  max_prompt_chars: 32000
+  max_concurrent_requests: 4
+  request_timeout_seconds: 90
+  rate_limit_requests: 60
+  rate_limit_window_seconds: 60
+  trusted_hosts:
+    - localhost
+    - 127.0.0.1
+    - ::1
+  log_level: info
 
 deterministic:
-  rules_file: null # null = use built-in rules in deterministic/rules.py
+  rules_file: null
 
 backends:
   ollama:
     enabled: true
-    # Only localhost or a literal loopback/private IP is accepted. Public hosts,
-    # DNS names, redirects, credentials, and URL path prefixes fail closed.
     base_url: http://localhost:11434
-    # Pull with: ollama pull qwen3:3.5b  (adjust the tag to the Qwen 3.5
-    # variant you have pulled locally, e.g. qwen3:1.7b / qwen3:8b).
     model: qwen3.5
     timeout_seconds: 60
     max_prompt_chars: 128000
