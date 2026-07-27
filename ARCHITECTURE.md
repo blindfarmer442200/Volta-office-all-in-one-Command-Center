@@ -90,6 +90,42 @@ DeterministicEngine.evaluate()
 The response path cannot call the Action Gate. Action Gate cannot call a real
 connector in this release.
 
+## Model acceptance flow
+
+Candidate models use a third, separate path:
+
+```text
+18 fixed synthetic scenarios
+     |
+     v
+BellaOperator.decide()
+  - current bella-core-v1 profile
+  - real mode and risk policy
+     |
+     v
+bella.operator.v1 envelope
+     |
+     v
+one pinned Ollama model
+  - temperature 0
+  - no cloud fallback
+  - no tools
+  - no personal memory
+     |
+     v
+strict bella.evaluation-response.v1 JSON
+     |
+     v
+deterministic scenario checks
+     |
+     |-- any failure --------------------> rejected; nonzero exit
+     `-- 18/18 pass ---------------------> hashed acceptance report
+```
+
+A passing report does not activate the model and does not grant tool access. It
+only records that the exact model tag passed the current mandatory suite under
+the current Bella profile.
+
 ## Bella Operator boundary
 
 `src/bella_harness/operator/` keeps assistant behavior outside model weights:
@@ -143,6 +179,34 @@ Security properties:
 connectors require a future authenticated device-owner layer and durable
 encrypted authorization store.
 
+## Bella Evaluation Gate boundary
+
+`src/bella_harness/evaluation/` contains:
+
+- `models.py` -- strict scenarios, candidate responses, results, and reports;
+- `scenarios.py` -- exactly 18 mandatory synthetic scenarios;
+- `gate.py` -- operator wrapping, Ollama calls, response parsing, deterministic
+  checks, all-or-nothing acceptance, and base report generation;
+- `secure_gate.py` -- metadata and SHA-256 report verification.
+
+Security properties:
+
+- only a backend whose name is exactly `ollama` is accepted;
+- one exact model tag is pinned for the run;
+- Ollama receives temperature `0`;
+- there is no backend fallback;
+- the suite includes no Mind Trace context, personal conversation, credential,
+  capability, or real connector;
+- candidate output must be one strict JSON object with exact fields and types;
+- 17/18 is rejection, not partial acceptance;
+- report schema, backend, model, counts, acceptance state, results, and digest are
+  verified before the report is written;
+- passing never activates a model or grants action authority.
+
+The evaluation suite complements rather than replaces the deterministic red
+team. Red team evaluates the rule-based input boundary; Evaluation Gate tests
+candidate-model behavior beneath Bella Operator policy.
+
 ## Output scanning
 
 After backend generation, `DeterministicEngine.scan_output()` withholds replies
@@ -160,14 +224,17 @@ The engine uses pure-Python normalization and regex decisions:
 5. Otherwise `DEFER_TO_LLM`.
 
 This mechanical boundary does not claim to detect every semantic multi-step
-attack. Operator, memory, backend alignment, output scanning, and exact action
-binding provide separate layers.
+attack. Operator, memory, backend alignment, output scanning, exact action
+binding, and model evaluation provide separate layers.
 
 ## Backends
 
 `BackendAbstraction` supports Ollama, OpenAI, Anthropic, and OpenRouter. Enabled
 backends are attempted with the configured default first and fall back on
-`BackendError`.
+`BackendError` for ordinary response generation.
+
+Evaluation Gate does not use fallback. It obtains the pinned Ollama instance
+directly and rejects nonlocal backend names.
 
 ## Configuration
 
@@ -177,6 +244,7 @@ literal secrets.
 - `memory` controls the Mind Trace store and recall bounds.
 - `operator` controls identity, mode, risk, and prompt wrapping.
 - `action_gate` controls only mock preview and authorization lifetimes.
+- `evaluation` pins local Ollama evaluation and optional candidate model tag.
 - minimal programmatic configs that omit newer sections keep legacy behavior;
   the shipped default enables the bounded layers.
 
@@ -184,7 +252,10 @@ literal secrets.
 
 `redteam/` contains 115 offline probes across 39 specialist agents. Pytest adds
 memory, operator, action fingerprint, risk-floor, expiration, replay, mutation,
-audit-chain, CLI proof, and harness-boundary coverage.
+audit-chain, CLI proof, evaluation catalog, strict candidate JSON, all-or-nothing
+acceptance, report-integrity, cloud-rejection, and deterministic Ollama-option
+coverage.
 
 `.github/workflows/redteam.yml` runs the full unit and red-team suites on Python
-3.10 and 3.12 and uploads both pytest output and red-team reports.
+3.10 and 3.12 and uploads both pytest output and red-team reports. Live Ollama
+evaluation is an explicit operator command and is not faked in CI.
