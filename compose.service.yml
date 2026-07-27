@@ -1,0 +1,26 @@
+services:
+  bella:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bella-harness:0.2.0
+    network_mode: host
+    environment:
+      BELLA_SERVICE_TOKEN: ${BELLA_SERVICE_TOKEN:?Set BELLA_SERVICE_TOKEN to a strong random value}
+      BELLA__SERVICE__ENABLED: "true"
+      BELLA__SERVICE__HOST: 127.0.0.1
+      BELLA__SERVICE__PORT: "8765"
+      BELLA__SERVICE__ALLOW_REMOTE_BIND: "false"
+      BELLA__SERVICE__TRUSTED_HOSTS: '["localhost","127.0.0.1","::1"]'
+      BELLA__BACKENDS__OLLAMA__BASE_URL: http://127.0.0.1:11434
+      BELLA__HARNESS__ALLOW_CLOUD_FALLBACK: "false"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    restart: unless-stopped
+    stop_grace_period: 30s
