@@ -1,0 +1,114 @@
+# bella-harness default configuration
+#
+# API keys are NEVER read from this file. They are sourced exclusively from
+# environment variables (see backends.*.api_key_env below). Any literal secret
+# in configuration is rejected at load time.
+
+harness:
+  # Fraction-of-traffic target the deterministic engine aims to resolve
+  # without invoking an LLM backend. Informational only; actual routing is
+  # rule-driven, not sampled to hit this number.
+  deterministic_target: 0.70
+  # Backend used when the deterministic engine defers to an LLM.
+  default_backend: ollama
+  fail_closed: true
+  # Output half of the harness: re-scan the model's response before returning
+  # it. Blocks responses that leak credentials or the system prompt.
+  output_scanning:
+    enabled: true
+    # Optional sentinel string placed in your system prompt. If it ever shows
+    # up in a model response, the system prompt leaked and the reply is blocked.
+    canary: null
+
+# Mind Trace is reached only after the deterministic input gate has deferred a
+# request to an LLM. With no store_path it uses an empty in-memory store and
+# leaves the original request unchanged.
+memory:
+  enabled: true
+  # A configured store that cannot be verified blocks the model call by default.
+  fail_closed: true
+  store_path: null
+  max_results: 5
+  min_score: 10
+  max_context_chars: 6000
+  max_memory_chars: 1200
+
+# Bella Operator adds fixed identity, mode directives, deterministic risk,
+# visible non-executing plans, and approval boundaries outside model weights.
+operator:
+  enabled: true
+  # Supported modes: default, life, home, business, technical, care,
+  # developer, customer, quiet.
+
+# Action Gate is a separate exact-preview protocol. This release supports only
+# the local mock_action_sandbox and can never create outside side effects.
+action_gate:
+  enabled: true
+  preview_ttl_seconds: 900
+  authorization_ttl_seconds: 300
+
+# Evaluation is an all-or-nothing synthetic behavior gate for one pinned local
+# Ollama model. It never reads personal memory, falls back to cloud, changes the
+# active model, or grants tool permissions.
+evaluation:
+  enabled: true
+  backend: ollama
+  # null uses backends.ollama.model. Override explicitly when testing a candidate.
+  model: null
+  require_all: true
+  report_path: bella-evaluation-report.json
+
+# Tuning is explicit and human reviewed. Normal `bella ask` requests are never
+# captured automatically. With store_path null, review/export commands require
+# --db. Redacted export is the default and nothing uploads or trains itself.
+tuning:
+  enabled: true
+  store_path: null
+  automatic_capture: false
+  redacted_export_default: true
+  automatic_upload: false
+  automatic_training: false
+  automatic_model_activation: false
+
+
+deterministic:
+  rules_file: null # null = use built-in rules in deterministic/rules.py
+
+backends:
+  ollama:
+    enabled: true
+    # Only localhost or a literal loopback/private IP is accepted. Public hosts,
+    # DNS names, redirects, credentials, and URL path prefixes fail closed.
+    base_url: http://localhost:11434
+    # Pull with: ollama pull qwen3:3.5b  (adjust the tag to the Qwen 3.5
+    # variant you have pulled locally, e.g. qwen3:1.7b / qwen3:8b).
+    model: qwen3.5
+    timeout_seconds: 60
+    max_prompt_chars: 128000
+    max_response_bytes: 1000000
+    max_output_chars: 200000
+
+  openai:
+    enabled: false
+    api_key_env: OPENAI_API_KEY
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
+    timeout_seconds: 60
+
+  anthropic:
+    enabled: false
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: https://api.anthropic.com/v1
+    model: claude-3-5-sonnet-latest
+    timeout_seconds: 60
+
+  openrouter:
+    enabled: false
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    model: meta-llama/llama-3.1-70b-instruct
+    timeout_seconds: 60
+
+redteam:
+  fail_on_any_breach: true
+  report_path: redteam-report.json
