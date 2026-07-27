@@ -24,11 +24,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Compile source
+        run: python -m compileall -q src scripts
+
+      - name: Audit Python dependencies
+        run: python -m pip_audit -r requirements.txt
+
       - name: Run unit tests
         shell: bash
         run: |
           set -o pipefail
           python -m pytest -q 2>&1 | tee pytest-output.txt
+          count="$(grep -Eo '[0-9]+ passed' pytest-output.txt | tail -1 | awk '{print $1}')"
+          test -n "$count"
+          echo "PYTEST_COUNT=$count" >> "$GITHUB_ENV"
 
       - name: Upload pytest output
         if: always()
@@ -40,6 +49,13 @@ jobs:
       - name: Run red-team probe suite
         run: PYTHONPATH=src:. python -m bella_harness.cli redteam --report redteam-report.json
 
+      - name: Record red-team count
+        shell: bash
+        run: |
+          count="$(python -c 'import json; print(json.load(open("redteam-report.json", encoding="utf-8"))["passed"])')"
+          test -n "$count"
+          echo "REDTEAM_COUNT=$count" >> "$GITHUB_ENV"
+
       - name: Upload red-team report
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,6 +65,9 @@ jobs:
 
       - name: Build wheel and source archive
         run: python -m build
+
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
 
       - name: Smoke-test installed wheel
         shell: bash
@@ -70,7 +89,27 @@ jobs:
           assert report["package_version"] == "0.2.0"
           PY
 
-      - name: Upload distributions and doctor report
+      - name: Build and verify release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python scripts/build_release_manifest.py build \
+            --dist-dir dist \
+            --pyproject pyproject.toml \
+            --commit "$GITHUB_SHA" \
+            --unit-tests "$PYTEST_COUNT" \
+            --redteam-probes "$REDTEAM_COUNT" \
+            --doctor-report bella-doctor.json \
+            --output release-manifest.json \
+            --checksums SHA256SUMS \
+            --dependency-audit-passed \
+            --distribution-check-passed \
+            --wheel-smoke-passed
+          PYTHONPATH=src python scripts/build_release_manifest.py verify \
+            --manifest release-manifest.json \
+            --dist-dir dist
+
+      - name: Upload distributions and release evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -78,3 +117,5 @@ jobs:
           path: |
             dist/*
             bella-doctor.json
+            SHA256SUMS
+            release-manifest.json
