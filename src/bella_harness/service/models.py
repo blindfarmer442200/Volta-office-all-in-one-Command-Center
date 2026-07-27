@@ -26,9 +26,9 @@ class ChatTrace(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    schema: str = "bella.service-chat.v1"
+    schema_name: str = Field(default="bella.service-chat.v1", alias="schema")
     request_id: str
     response: str
     action: str
@@ -45,9 +45,9 @@ class ChatResponse(BaseModel):
 
 
 class LiveResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    schema: str = "bella.service-live.v1"
+    schema_name: str = Field(default="bella.service-live.v1", alias="schema")
     status: str = "alive"
 
 
@@ -60,9 +60,9 @@ class ReadyCheck(BaseModel):
 
 
 class ReadyResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    schema: str = "bella.service-ready.v1"
+    schema_name: str = Field(default="bella.service-ready.v1", alias="schema")
     ready: bool
     package_version: str
     checks: list[ReadyCheck]
@@ -77,5 +77,5 @@ class ErrorResponse(BaseModel):
 
 
 def model_dump_compat(model: BaseModel) -> dict[str, Any]:
-    """Keep serialization explicit across supported Pydantic versions."""
-    return model.model_dump(exclude_none=True)
+    """Serialize explicit public aliases across supported Pydantic versions."""
+    return model.model_dump(exclude_none=True, by_alias=True)
