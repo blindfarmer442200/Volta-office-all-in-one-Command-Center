@@ -89,14 +89,19 @@ jobs:
           with tarfile.open(archives[0], "r:gz") as archive:
               names = set(archive.getnames())
           required = {
+              ".dockerignore",
+              "Dockerfile",
               "CHANGELOG.md",
               "SECURITY.md",
+              "compose.service.yml",
               "config/default.yaml",
               "docs/PRODUCTION_READINESS.md",
               "docs/RELEASE_PROCESS.md",
               "docs/CLOUD_EGRESS.md",
+              "docs/SERVICE_DEPLOYMENT.md",
               "scripts/build_release_manifest.py",
               "tests/test_release_manifest.py",
+              "tests/test_service.py",
               "redteam/runner.py",
           }
           missing = sorted(
@@ -106,14 +111,18 @@ jobs:
           assert not missing, missing
           PY
 
-      - name: Smoke-test installed wheel
+      - name: Smoke-test installed wheel and service extra
         shell: bash
         run: |
           set -euo pipefail
           python -m venv .wheel-smoke
           .wheel-smoke/bin/python -m pip install --upgrade pip
-          .wheel-smoke/bin/python -m pip install dist/*.whl
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          wheel_uri="file://$(realpath "$wheel")"
+          .wheel-smoke/bin/python -m pip install "bella-harness[service] @ ${wheel_uri}"
           .wheel-smoke/bin/python -m pip check
+          .wheel-smoke/bin/python -c 'import fastapi, uvicorn'
           .wheel-smoke/bin/bella ask "hello" | grep -q "Hello"
           .wheel-smoke/bin/bella doctor --json > bella-doctor.json
           .wheel-smoke/bin/python - <<'PY'
@@ -125,7 +134,66 @@ jobs:
           assert report["schema"] == "bella.doctor-report.v1"
           assert report["ready"] is True
           assert report["package_version"] == os.environ["PROJECT_VERSION"]
+          service = next(check for check in report["checks"] if check["name"] == "http_service")
+          assert service["status"] == "skip"
           PY
+
+      - name: Build and smoke-test hardened service container
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="bella-harness-service:ci-${{ matrix.python-version }}"
+          name="bella-service-ci-${{ matrix.python-version }}"
+          port="187${{ matrix.python-version == '3.10' && '10' || '12' }}"
+          token="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          cleanup() {
+            docker logs "$name" > "docker-service-${{ matrix.python-version }}.log" 2>&1 || true
+            docker rm -f "$name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker build --pull=false -t "$image" .
+          test "$(docker inspect --format '{{.Config.User}}' "$image")" = "10001:10001"
+          docker run -d \
+            --name "$name" \
+            --network host \
+            --read-only \
+            --tmpfs /tmp:size=64m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e BELLA_SERVICE_TOKEN="$token" \
+            -e BELLA__SERVICE__PORT="$port" \
+            "$image" >/dev/null
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent "http://127.0.0.1:${port}/health/live" >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              echo "Bella service did not become live" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          response="$(curl --fail --silent \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            -d '{"prompt":"hello","mode":"life"}' \
+            "http://127.0.0.1:${port}/v1/chat")"
+          RESPONSE="$response" python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["RESPONSE"])
+          assert payload["schema"] == "bella.service-chat.v1"
+          assert payload["handled_deterministically"] is True
+          assert payload["external_action_performed"] is False
+          assert "trace" not in payload
+          PY
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            -d '{}' \
+            "http://127.0.0.1:${port}/v1/actions")"
+          test "$status" = "404"
 
       - name: Build and verify release manifest
         shell: bash
@@ -142,7 +210,8 @@ jobs:
             --checksums SHA256SUMS \
             --dependency-audit-passed \
             --distribution-check-passed \
-            --wheel-smoke-passed
+            --wheel-smoke-passed \
+            --container-smoke-passed
           PYTHONPATH=src python scripts/build_release_manifest.py verify \
             --manifest release-manifest.json \
             --dist-dir dist
@@ -155,5 +224,6 @@ jobs:
           path: |
             dist/*
             bella-doctor.json
+            docker-service-${{ matrix.python-version }}.log
             SHA256SUMS
             release-manifest.json
