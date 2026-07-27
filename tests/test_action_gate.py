@@ -1,4 +1,4 @@
-"""Exact-preview, authorization, replay, expiry, and audit tests."""
+"""Exact-preview, authorization, replay, expiry, intent, and audit tests."""
 
 from __future__ import annotations
 
@@ -30,12 +30,16 @@ class MutableClock:
         self.value += timedelta(seconds=seconds)
 
 
-def _decision(risk=RiskLevel.HIGH, approval=True):
+def _decision(
+    risk=RiskLevel.HIGH,
+    approval=True,
+    reason="external communication",
+):
     return OperatorDecision(
         mode=BellaMode.BUSINESS,
         risk_level=risk,
         approval_required=approval,
-        reasons=("test",),
+        reasons=(reason,),
         plan=("preview", "approve", "verify"),
     )
 
@@ -107,6 +111,29 @@ def test_high_risk_cannot_authorize_critical_payment_kind():
     )
     with pytest.raises(ActionGateError, match="below the 'critical' floor"):
         gate.prepare(payment, _decision(RiskLevel.HIGH, approval=True))
+
+
+def test_same_risk_wrong_action_kind_is_rejected():
+    gate = _gate()
+    calendar = ActionSpec(
+        kind=ActionKind.CALENDAR_CHANGE,
+        target="calendar-event-1",
+        payload={"operation": "reschedule", "time": "2026-07-28T10:00:00-05:00"},
+    )
+    with pytest.raises(ActionGateError, match="does not authorize action kind"):
+        gate.prepare(
+            calendar,
+            _decision(RiskLevel.HIGH, approval=True, reason="external communication"),
+        )
+
+
+def test_unrecognized_or_non_executable_reason_fails_closed():
+    gate = _gate()
+    with pytest.raises(ActionGateError, match="does not authorize action kind"):
+        gate.prepare(
+            _message_spec(),
+            _decision(RiskLevel.HIGH, approval=True, reason="unknown reason"),
+        )
 
 
 def test_owner_confirmation_and_exact_fingerprint_are_required():
@@ -223,7 +250,7 @@ def test_revoke_clears_authorization_and_audit_chain_verifies():
 
 def test_audit_tampering_is_detected():
     gate = _gate()
-    preview = gate.prepare(_message_spec(), _decision())
+    gate.prepare(_message_spec(), _decision())
     assert gate.verify_audit_chain()
     gate._audit[0].details["kind"] = "payment"
     assert not gate.verify_audit_chain()
