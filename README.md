@@ -1,9 +1,9 @@
 # bella-harness
 
 A deterministic-first agent safety harness. A rule-based gate classifies
-every request *before* any LLM is involved -- blocking known attack patterns
-outright, answering trivial requests directly, and deferring everything else
-to a configured LLM backend.
+every request *before* any LLM is involved -- blocking known attack patterns,
+answering trivial requests directly, and deferring legitimate requests to a
+configured backend.
 
 Red team score: **115/115 clean** across 39 specialist attack categories,
 zero breaches, zero false positives, verified deterministically in CI on
@@ -11,19 +11,18 @@ every PR (no live model required).
 
 ## Why deterministic-first
 
-Relying solely on an LLM's own alignment training to refuse attacks means
-every request pays the latency/cost of a model call, and safety is only as
-good as that one model's training. bella-harness puts fast, auditable,
-zero-inference boundaries around the model:
+bella-harness puts fast, auditable, zero-inference boundaries around the model:
 
-- **Blocks** known attack patterns before any memory or model access.
+- **Blocks** known attack patterns before memory or model access.
 - **Answers directly** for greetings and arithmetic with no model call.
 - **Recalls approved memory only after the gate defers**, so blocked requests
   never touch Mind Trace and memory remains evidence, not authority.
 - **Applies Bella Operator outside the model**, giving every backend the same
   identity, mode, risk, accessibility, uncertainty, and approval rules.
-- **Defers** legitimate requests to the configured LLM backend.
-- **Scans the model's output** and withholds leaked credentials or system-prompt
+- **Separates plans from actions** through an exact, expiring, one-use Action
+  Gate limited to a local side-effect-free sandbox.
+- **Defers** legitimate response generation to the configured LLM backend.
+- **Scans model output** and withholds leaked credentials or system-prompt
   canaries before the response reaches the user.
 
 ## Quickstart
@@ -41,6 +40,14 @@ PYTHONPATH=src python -m bella_harness.cli ask \
   --json \
   "Draft an email to the customer"
 
+# Exact action preview -- local mock only, no side effects
+PYTHONPATH=src python -m bella_harness.cli sandbox-action \
+  "Send an email to the customer" \
+  --kind send_message \
+  --target customer@example.com \
+  --payload '{"subject":"Invoice","body":"Invoice 1042 is overdue."}' \
+  --mode business
+
 # Run the red-team suite fully offline
 PYTHONPATH=src:. python -m bella_harness.cli redteam
 ```
@@ -57,21 +64,16 @@ The first integration is deliberately read-only:
 - private records are excluded in Customer mode;
 - instruction-like memory is rejected by the deterministic gate;
 - memory is labeled as untrusted JSON data, never instructions;
-- memory cannot authorize email, deletion, payment, publishing, scheduling,
-  account changes, device control, or any other external action;
+- memory cannot authorize external actions;
 - malformed configured stores fail closed by default;
 - irrelevant or empty recall leaves the original request unchanged.
 
-With `memory.store_path: null` the harness uses an empty store. See
-[docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md).
+See [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md).
 
 ## Bella Operator
 
-Bella Operator is the model-independent assistant layer inside the harness.
-The shipped configuration enables it before backend generation and after the
-input gate has deferred the request.
-
-It provides:
+Bella Operator is the model-independent assistant layer inside the harness. It
+provides:
 
 - the fixed `bella-core-v1` identity;
 - Default, Life, Home, Business, Technical, Care, Developer, Customer, and
@@ -80,12 +82,34 @@ It provides:
 - visible plans for consequential requests;
 - explicit current-approval requirements for High and Critical requests;
 - accessibility and uncertainty rules;
-- a hard rule that plans and memories are not execution authority;
+- hard rules that plans and memories are not execution authority;
 - a hard rule that completed-action claims require verified tool results.
 
-Operator metadata is returned by `bella ask --json`, including the active mode,
-risk level, approval requirement, reasons, and visible plan. See
+Operator metadata is returned by `bella ask --json`. See
 [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md).
+
+## Bella Action Gate
+
+Action Gate is a separate API from ordinary chat responses. It binds an exact
+connector, kind, target, and JSON payload to a SHA-256 fingerprint, then requires
+explicit confirmation before issuing a short-lived one-use capability.
+
+Current guarantees:
+
+- only `mock_action_sandbox` is accepted;
+- previews expire in at most 15 minutes;
+- authorizations expire in at most 5 minutes;
+- only a capability hash is retained;
+- changed payloads and replayed capabilities fail closed;
+- High requests cannot authorize Critical action kinds;
+- an append-only hash chain records preview, authorization, expiration,
+  revocation, and mock execution;
+- every successful execution records `simulated=true` and
+  `sideEffectsPerformed=false`.
+
+The CLI proof can preview or, with `--confirm`, consume the capability inside
+the mock sandbox. It never displays the raw capability and cannot contact an
+outside service. See [docs/ACTION_GATE.md](docs/ACTION_GATE.md).
 
 ## Backends
 
@@ -108,10 +132,12 @@ API keys are only read from environment variables named by each backend's
 
 ## Docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request flow and boundaries.
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request and action flows.
 - [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) -- approved-memory
   format and security invariants.
 - [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md) -- identity, modes, risk,
   approval, and completion-claim rules.
+- [docs/ACTION_GATE.md](docs/ACTION_GATE.md) -- exact preview, authorization,
+  replay protection, sandbox execution, and future connector requirements.
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- adding a rule, backend, or probe.
 - [CLAUDE.md](CLAUDE.md) -- handoff notes for Claude Code.
