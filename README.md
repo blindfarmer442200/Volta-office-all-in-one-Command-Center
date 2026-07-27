@@ -1,9 +1,10 @@
 # bella-harness
 
-A deterministic-first safety and memory harness for Bella AI. Rule-based code
-classifies every request before any model is involved, governs which memories
-may be recalled, applies Bella's identity and consequence policy, controls model
-routing, scans output, and keeps real-world actions disabled.
+A deterministic-first safety, memory, and authenticated service harness for
+Bella AI. Rule-based code classifies every request before any model is involved,
+governs which memories may be recalled, applies Bella's identity and consequence
+policy, controls model routing, scans output, and keeps real-world actions
+disabled.
 
 Current deterministic red-team baseline: **115/115 clean** across 39 specialist
 attack categories, with zero breaches and zero false positives.
@@ -18,13 +19,14 @@ Bella Harness `0.2.x` is production-scoped for:
 - private/local Ollama generation;
 - all-or-nothing local-model evaluation;
 - explicit human correction and privacy-first tuning export;
+- authenticated local-first HTTP chat and health endpoints;
 - exact Action Gate preview and authorization in a side-effect-free mock sandbox;
-- installable wheel, production doctor, dependency audit, checksums, and release
-  manifest.
+- installable wheel, hardened non-root container, production doctor, dependency
+  audit, checksums, and release manifest.
 
 It is **not** production-ready for real email, calendar, payment, account, file,
 smart-home, or device-control execution. Those connectors are intentionally not
-implemented.
+implemented, and the HTTP service exposes no action endpoint.
 
 ## Safety model
 
@@ -58,14 +60,20 @@ Key guarantees:
 - Blocked requests never reach memory or a model.
 - Memory is evidence, never instructions or authority.
 - Plans and approval metadata are not action capabilities.
-- Ordinary model responses cannot execute anything.
+- Ordinary model and HTTP responses cannot execute anything.
 - Ollama is restricted to localhost or literal private addresses.
 - An Ollama outage cannot silently route prompts or memory to cloud.
 - A candidate model must pass all 18 Bella behavior scenarios.
 - Normal conversations are not automatically captured for tuning.
 - Tuning export is redacted by default and never uploads or trains itself.
+- Service chat/readiness requires a strong bearer token.
+- Service bodies, prompts, concurrency, timeouts, request rate, and failed
+  authentication attempts are bounded.
+- Service logs omit prompt, response, memory, token, and capability contents.
 
 ## Install
+
+Base CLI:
 
 ```bash
 python -m pip install --upgrade pip build
@@ -74,6 +82,12 @@ python -m venv .venv
 . .venv/bin/activate
 python -m pip install dist/*.whl
 python -m pip check
+```
+
+Authenticated service:
+
+```bash
+python -m pip install 'bella-harness[service]'
 ```
 
 Windows PowerShell:
@@ -90,8 +104,8 @@ bella doctor --live
 ```
 
 The offline doctor checks policy, packaged configuration, store integrity,
-backend settings, and private Ollama routing. `--live` adds a prompt-free Ollama
-health check.
+backend settings, private Ollama routing, and service configuration when enabled.
+`--live` adds a prompt-free Ollama health check.
 
 ## Quickstart
 
@@ -103,6 +117,16 @@ bella ask "2 + 2"
 # Free-form response through configured Ollama
 bella ask --mode business --json "Draft an email to the customer"
 
+# Candidate model must pass 18/18
+bella evaluate-bella \
+  --model qwen3.5 \
+  --report bella-evaluation-report.json
+
+# Authenticated loopback service
+export BELLA_SERVICE_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export BELLA__SERVICE__ENABLED=true
+bella serve
+
 # Local mock action preview only
 bella sandbox-action \
   "Send an email to the customer" \
@@ -110,11 +134,6 @@ bella sandbox-action \
   --target customer@example.com \
   --payload '{"subject":"Invoice","body":"Invoice 1042 is overdue."}' \
   --mode business
-
-# Candidate model must pass 18/18
-bella evaluate-bella \
-  --model qwen3.5 \
-  --report bella-evaluation-report.json
 
 # Explicit human correction; ordinary chats are never auto-captured
 bella review-response \
@@ -141,6 +160,27 @@ Source-tree execution:
 ```bash
 PYTHONPATH=src python -m bella_harness <command>
 ```
+
+## Authenticated service
+
+The optional FastAPI service exposes only:
+
+| Method | Path | Authentication |
+|---|---|---|
+| `GET` | `/health/live` | No; minimal status only |
+| `GET` | `/health/ready` | Bearer token |
+| `POST` | `/v1/chat` | Bearer token |
+
+API docs, OpenAPI, CORS, proxy-header trust, Uvicorn access logs, and action
+routes are disabled. Trace metadata is hidden unless a trusted client explicitly
+requests `"trace": true`.
+
+The shipped configuration is disabled and loopback-only. Non-loopback binding
+requires explicit consent and an explicit non-loopback trusted Host. Docker
+Compose uses Linux host networking so Bella can remain on loopback while
+reaching a host Ollama and Caddy.
+
+See [docs/SERVICE_DEPLOYMENT.md](docs/SERVICE_DEPLOYMENT.md).
 
 ## Mind Trace
 
@@ -257,13 +297,17 @@ Every pull request runs on Python 3.10 and 3.12:
 - wheel and source-archive build;
 - `twine check`;
 - required source-archive content validation;
-- clean wheel installation and `pip check`;
+- clean wheel installation with the service extra and `pip check`;
 - installed deterministic command and production doctor;
+- non-root, read-only authenticated service container smoke test;
+- closed action-route proof;
 - SHA-256 checksums and commit-bound release manifest verification.
 
-A release tag must exactly match `v<project-version>`, point to a commit contained
-in `main`, and have an exact notes file under `docs/releases/`. Manual release
-workflow runs build evidence but do not publish.
+The release manifest requires the wheel, installed doctor, and authenticated
+service container smoke tests to pass. A release tag must exactly match
+`v<project-version>`, point to a commit contained in `main`, and have an exact
+notes file under `docs/releases/`. Manual release workflow runs build evidence
+but do not publish.
 
 See [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
 
@@ -278,8 +322,8 @@ bella doctor --live
 bella evaluate-bella --model <exact-model-tag> --report bella-evaluation-report.json
 ```
 
-Final device, screen-reader, voice, load, long-running Ollama, network, and backup
-restoration tests remain deployment-specific.
+Final device, screen-reader, voice, reverse-proxy, load, long-running Ollama,
+network, token-rotation, and backup-restoration tests remain deployment-specific.
 
 See [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 
@@ -290,6 +334,7 @@ See [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 - [SECURITY.md](SECURITY.md)
 - [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md)
 - [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)
+- [docs/SERVICE_DEPLOYMENT.md](docs/SERVICE_DEPLOYMENT.md)
 - [docs/CLOUD_EGRESS.md](docs/CLOUD_EGRESS.md)
 - [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md)
 - [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md)

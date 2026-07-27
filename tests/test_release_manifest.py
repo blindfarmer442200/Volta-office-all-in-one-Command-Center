@@ -24,10 +24,8 @@ COMMIT = "a" * 40
 def _fixture(tmp_path: Path):
     dist = tmp_path / "dist"
     dist.mkdir(parents=True)
-    wheel = dist / "bella_harness-0.2.0-py3-none-any.whl"
-    sdist = dist / "bella_harness-0.2.0.tar.gz"
-    wheel.write_bytes(b"wheel-bytes")
-    sdist.write_bytes(b"sdist-bytes")
+    (dist / "bella_harness-0.2.0-py3-none-any.whl").write_bytes(b"wheel-bytes")
+    (dist / "bella_harness-0.2.0.tar.gz").write_bytes(b"sdist-bytes")
 
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(
@@ -50,24 +48,35 @@ def _fixture(tmp_path: Path):
     return dist, pyproject, doctor
 
 
-def _build(tmp_path: Path):
+def _arguments(tmp_path: Path, **overrides):
     dist, pyproject, doctor = _fixture(tmp_path)
-    manifest_path = tmp_path / "release-manifest.json"
-    checksums_path = tmp_path / "SHA256SUMS"
-    manifest = build_release_manifest(
-        dist_dir=dist,
-        pyproject_path=pyproject,
-        commit_sha=COMMIT,
-        unit_tests=MIN_UNIT_TESTS,
-        redteam_probes=MIN_REDTEAM_PROBES,
-        doctor_report_path=doctor,
-        output_path=manifest_path,
-        checksums_path=checksums_path,
-        dependency_audit_passed=True,
-        distribution_check_passed=True,
-        wheel_smoke_passed=True,
+    arguments = {
+        "dist_dir": dist,
+        "pyproject_path": pyproject,
+        "commit_sha": COMMIT,
+        "unit_tests": MIN_UNIT_TESTS,
+        "redteam_probes": MIN_REDTEAM_PROBES,
+        "doctor_report_path": doctor,
+        "output_path": tmp_path / "release-manifest.json",
+        "checksums_path": tmp_path / "SHA256SUMS",
+        "dependency_audit_passed": True,
+        "distribution_check_passed": True,
+        "wheel_smoke_passed": True,
+        "container_smoke_passed": True,
+    }
+    arguments.update(overrides)
+    return arguments
+
+
+def _build(tmp_path: Path):
+    arguments = _arguments(tmp_path)
+    manifest = build_release_manifest(**arguments)
+    return (
+        arguments["dist_dir"],
+        arguments["output_path"],
+        arguments["checksums_path"],
+        manifest,
     )
-    return dist, manifest_path, checksums_path, manifest
 
 
 def test_release_manifest_hashes_and_verifies_two_artifacts(tmp_path):
@@ -79,6 +88,7 @@ def test_release_manifest_hashes_and_verifies_two_artifacts(tmp_path):
     assert manifest["gates"]["unit_tests_minimum"] == MIN_UNIT_TESTS
     assert manifest["gates"]["redteam_probes_passed"] == MIN_REDTEAM_PROBES
     assert manifest["gates"]["redteam_probes_minimum"] == MIN_REDTEAM_PROBES
+    assert manifest["gates"]["container_smoke_passed"] is True
     assert len(manifest["artifacts"]) == 2
     assert verify_release_manifest(manifest_path, dist_dir=dist)
 
@@ -87,22 +97,18 @@ def test_release_manifest_hashes_and_verifies_two_artifacts(tmp_path):
     assert all("  bella_harness-0.2.0" in line for line in checksum_lines)
 
 
-def test_release_manifest_rejects_unpassed_gate(tmp_path):
-    dist, pyproject, doctor = _fixture(tmp_path)
-    with pytest.raises(ReleaseManifestError, match="dependency audit"):
-        build_release_manifest(
-            dist_dir=dist,
-            pyproject_path=pyproject,
-            commit_sha=COMMIT,
-            unit_tests=MIN_UNIT_TESTS,
-            redteam_probes=MIN_REDTEAM_PROBES,
-            doctor_report_path=doctor,
-            output_path=tmp_path / "manifest.json",
-            checksums_path=tmp_path / "sums",
-            dependency_audit_passed=False,
-            distribution_check_passed=True,
-            wheel_smoke_passed=True,
-        )
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"dependency_audit_passed": False}, "dependency audit"),
+        ({"distribution_check_passed": False}, "distribution check"),
+        ({"wheel_smoke_passed": False}, "wheel smoke"),
+        ({"container_smoke_passed": False}, "container smoke"),
+    ],
+)
+def test_release_manifest_rejects_unpassed_gate(tmp_path, override, message):
+    with pytest.raises(ReleaseManifestError, match=message):
+        build_release_manifest(**_arguments(tmp_path, **override))
 
 
 @pytest.mark.parametrize(
@@ -118,86 +124,44 @@ def test_release_manifest_rejects_regressed_test_baselines(
     redteam_probes,
     message,
 ):
-    dist, pyproject, doctor = _fixture(tmp_path)
     with pytest.raises(ReleaseManifestError, match=message):
         build_release_manifest(
-            dist_dir=dist,
-            pyproject_path=pyproject,
-            commit_sha=COMMIT,
-            unit_tests=unit_tests,
-            redteam_probes=redteam_probes,
-            doctor_report_path=doctor,
-            output_path=tmp_path / "manifest.json",
-            checksums_path=tmp_path / "sums",
-            dependency_audit_passed=True,
-            distribution_check_passed=True,
-            wheel_smoke_passed=True,
+            **_arguments(
+                tmp_path,
+                unit_tests=unit_tests,
+                redteam_probes=redteam_probes,
+            )
         )
 
 
 def test_release_manifest_rejects_not_ready_or_wrong_version_doctor(tmp_path):
-    dist, pyproject, doctor = _fixture(tmp_path)
+    arguments = _arguments(tmp_path)
+    doctor = Path(arguments["doctor_report_path"])
     payload = json.loads(doctor.read_text(encoding="utf-8"))
     payload["ready"] = False
     doctor.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ReleaseManifestError, match="not production-ready"):
-        build_release_manifest(
-            dist_dir=dist,
-            pyproject_path=pyproject,
-            commit_sha=COMMIT,
-            unit_tests=MIN_UNIT_TESTS,
-            redteam_probes=MIN_REDTEAM_PROBES,
-            doctor_report_path=doctor,
-            output_path=tmp_path / "manifest.json",
-            checksums_path=tmp_path / "sums",
-            dependency_audit_passed=True,
-            distribution_check_passed=True,
-            wheel_smoke_passed=True,
-        )
+        build_release_manifest(**arguments)
 
-    dist, pyproject, doctor = _fixture(tmp_path / "wrong-version")
+    arguments = _arguments(tmp_path / "wrong-version")
+    doctor = Path(arguments["doctor_report_path"])
     payload = json.loads(doctor.read_text(encoding="utf-8"))
     payload["package_version"] = "0.1.0"
     doctor.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ReleaseManifestError, match="package version"):
-        build_release_manifest(
-            dist_dir=dist,
-            pyproject_path=pyproject,
-            commit_sha=COMMIT,
-            unit_tests=MIN_UNIT_TESTS,
-            redteam_probes=MIN_REDTEAM_PROBES,
-            doctor_report_path=doctor,
-            output_path=tmp_path / "wrong-version" / "manifest.json",
-            checksums_path=tmp_path / "wrong-version" / "sums",
-            dependency_audit_passed=True,
-            distribution_check_passed=True,
-            wheel_smoke_passed=True,
-        )
+        build_release_manifest(**arguments)
 
 
-def test_release_manifest_rejects_missing_or_unexpected_artifacts(tmp_path):
-    dist, pyproject, doctor = _fixture(tmp_path)
-    (dist / "extra.txt").write_text("unexpected", encoding="utf-8")
+def test_release_manifest_rejects_unexpected_artifacts(tmp_path):
+    arguments = _arguments(tmp_path)
+    (Path(arguments["dist_dir"]) / "extra.txt").write_text("unexpected", encoding="utf-8")
     with pytest.raises(ReleaseManifestError, match="unexpected files"):
-        build_release_manifest(
-            dist_dir=dist,
-            pyproject_path=pyproject,
-            commit_sha=COMMIT,
-            unit_tests=MIN_UNIT_TESTS,
-            redteam_probes=MIN_REDTEAM_PROBES,
-            doctor_report_path=doctor,
-            output_path=tmp_path / "manifest.json",
-            checksums_path=tmp_path / "sums",
-            dependency_audit_passed=True,
-            distribution_check_passed=True,
-            wheel_smoke_passed=True,
-        )
+        build_release_manifest(**arguments)
 
 
 def test_release_manifest_detects_artifact_manifest_and_gate_tampering(tmp_path):
     dist, manifest_path, _, _ = _build(tmp_path)
-    wheel = dist / "bella_harness-0.2.0-py3-none-any.whl"
-    wheel.write_bytes(b"changed")
+    (dist / "bella_harness-0.2.0-py3-none-any.whl").write_bytes(b"changed")
     assert not verify_release_manifest(manifest_path, dist_dir=dist)
 
     dist, manifest_path, _, _ = _build(tmp_path / "second")
@@ -208,7 +172,7 @@ def test_release_manifest_detects_artifact_manifest_and_gate_tampering(tmp_path)
 
     dist, manifest_path, _, _ = _build(tmp_path / "third")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["gates"]["unit_tests_passed"] = 1
+    payload["gates"]["container_smoke_passed"] = False
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     assert not verify_release_manifest(manifest_path, dist_dir=dist)
 
