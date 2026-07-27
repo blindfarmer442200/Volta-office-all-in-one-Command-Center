@@ -1,6 +1,5 @@
 """Bella model evaluation and acceptance gate."""
 
-from bella_harness.evaluation.gate import BellaEvaluationGate
 from bella_harness.evaluation.models import (
     EvaluationError,
     EvaluationReport,
@@ -9,6 +8,7 @@ from bella_harness.evaluation.models import (
     ScenarioResult,
 )
 from bella_harness.evaluation.scenarios import DEFAULT_SCENARIOS, validate_scenario_catalog
+from bella_harness.evaluation.secure_gate import BellaEvaluationGate
 
 __all__ = [
     "BellaEvaluationGate",
