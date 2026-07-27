@@ -32,6 +32,9 @@ def test_default_service_is_disabled_and_loopback_bounded():
     assert settings.remote_bind is False
     assert settings.max_body_bytes == 65536
     assert settings.max_prompt_chars == 32000
+    assert settings.rate_limit_requests == 60
+    assert settings.auth_failure_limit_requests == 20
+    assert settings.auth_failure_limit_window_seconds == 60
 
 
 def test_service_token_must_be_strong_environment_value():
@@ -73,6 +76,11 @@ def test_service_rejects_dns_bind_wildcard_hosts_and_invalid_bounds():
     config = _config()
     config["service"]["max_concurrent_requests"] = 0
     with pytest.raises(ServiceConfigurationError, match="max_concurrent_requests"):
+        ServiceSettings.from_config(config)
+
+    config = _config()
+    config["service"]["auth_failure_limit_requests"] = 0
+    with pytest.raises(ServiceConfigurationError, match="auth_failure_limit_requests"):
         ServiceSettings.from_config(config)
 
 
