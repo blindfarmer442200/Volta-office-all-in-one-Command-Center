@@ -58,6 +58,18 @@ evaluation:
   require_all: true
   report_path: bella-evaluation-report.json
 
+# Tuning is explicit and human reviewed. Normal `bella ask` requests are never
+# captured automatically. With store_path null, review/export commands require
+# --db. Redacted export is the default and nothing uploads or trains itself.
+tuning:
+  enabled: true
+  store_path: null
+  automatic_capture: false
+  redacted_export_default: true
+  automatic_upload: false
+  automatic_training: false
+  automatic_model_activation: false
+
 
 deterministic:
   rules_file: null # null = use built-in rules in deterministic/rules.py

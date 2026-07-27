@@ -23,6 +23,8 @@ bella-harness puts fast, auditable, zero-inference boundaries around the model:
   Gate limited to a local side-effect-free sandbox.
 - **Rejects unproven candidate models** through an Ollama-only, all-or-nothing
   18-scenario Bella Evaluation Gate.
+- **Learns only from explicit human review** through a durable correction loop
+  with versioned replacements and redacted-by-default local dataset export.
 - **Defers** legitimate response generation to the configured LLM backend.
 - **Scans model output** and withholds leaked credentials or system-prompt
   canaries before the response reaches the user.
@@ -54,6 +56,25 @@ PYTHONPATH=src python -m bella_harness.cli sandbox-action \
 PYTHONPATH=src python -m bella_harness.cli evaluate-bella \
   --model qwen3.5 \
   --report bella-evaluation-report.json
+
+# Explicitly save a human correction. Normal `bella ask` is never auto-captured.
+PYTHONPATH=src python -m bella_harness.cli review-response \
+  --db bella-tuning.sqlite3 \
+  --interaction-id invoice-answer-001 \
+  --prompt @prompt.txt \
+  --response @original-response.txt \
+  --rating unsafe_overreach \
+  --corrected @corrected-response.txt \
+  --mode business \
+  --risk-level high \
+  --model qwen3.5
+
+# Verify and export redacted local SFT, preference, evaluation, and regression data.
+PYTHONPATH=src python -m bella_harness.cli verify-tuning \
+  --db bella-tuning.sqlite3
+PYTHONPATH=src python -m bella_harness.cli export-tuning \
+  --db bella-tuning.sqlite3 \
+  --output-dir bella-dataset
 
 # Run the red-team suite fully offline
 PYTHONPATH=src:. python -m bella_harness.cli redteam
@@ -144,6 +165,34 @@ to its model, profile, results, counts, acceptance state, and SHA-256 digest.
 
 See [docs/BELLA_EVALUATION_GATE.md](docs/BELLA_EVALUATION_GATE.md).
 
+## Bella Correction and Tuning Loop
+
+The tuning loop is explicit and human controlled. Ordinary conversations are
+not silently added to a dataset.
+
+The local SQLite store preserves:
+
+- immutable prompts and original responses with SHA-256 values;
+- immutable human feedback history;
+- exact human replacement answers;
+- correction version history with one active replacement;
+- a hash-chained audit trail;
+- export audit events.
+
+Export is redacted by default and separates reviewed data into:
+
+- `sft.jsonl` for reviewed good answers and human corrections;
+- `preference.jsonl` for corrected chosen-versus-rejected pairs;
+- `evaluation-only.jsonl` for negative feedback still awaiting correction;
+- `regression.jsonl` for human-derived replay cases;
+- `manifest.json` for counts, byte sizes, file hashes, and dataset digest.
+
+The loop never stores hidden Mind Trace packets, connector credentials, or
+Action Gate capabilities. It never uploads, trains, or activates a model. Exact
+unredacted export requires `export-tuning --exact` and still stays local.
+
+See [docs/BELLA_TUNING_LOOP.md](docs/BELLA_TUNING_LOOP.md).
+
 ## Backends
 
 One interface (`BackendAbstraction`) covers four backends configured in
@@ -165,8 +214,8 @@ API keys are only read from environment variables named by each backend's
 
 ## Docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request, action, and model
-  acceptance flows.
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- complete request, action, model
+  acceptance, and tuning-data flows.
 - [docs/MIND_TRACE_MEMORY.md](docs/MIND_TRACE_MEMORY.md) -- approved-memory
   format and security invariants.
 - [docs/BELLA_OPERATOR.md](docs/BELLA_OPERATOR.md) -- identity, modes, risk,
@@ -175,5 +224,7 @@ API keys are only read from environment variables named by each backend's
   replay protection, sandbox execution, and future connector requirements.
 - [docs/BELLA_EVALUATION_GATE.md](docs/BELLA_EVALUATION_GATE.md) -- mandatory
   behavior scenarios, report integrity, and local model acceptance.
+- [docs/BELLA_TUNING_LOOP.md](docs/BELLA_TUNING_LOOP.md) -- human corrections,
+  SQLite integrity, redaction, and local dataset export.
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- adding a rule, backend, or probe.
 - [CLAUDE.md](CLAUDE.md) -- handoff notes for Claude Code.

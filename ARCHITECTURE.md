@@ -39,8 +39,9 @@ DeterministicEngine.evaluate()
        DeterministicEngine.scan_output()
 ```
 
-`BellaHarness.handle()` never executes actions. It returns a response plus
-visible memory and operator metadata.
+`BellaHarness.handle()` never executes actions and never writes tuning data. It
+returns a response plus visible memory and operator metadata. Saving a review is
+a separate explicit workflow.
 
 ## Action flow
 
@@ -126,6 +127,56 @@ A passing report does not activate the model and does not grant tool access. It
 only records that the exact model tag passed the current mandatory suite under
 the current Bella profile.
 
+## Human correction and tuning-data flow
+
+Human-reviewed learning uses a fourth, explicit path:
+
+```text
+human selects one completed interaction
+     |
+     v
+review-response command
+  - stable interaction id
+  - visible prompt only
+  - visible original response only
+  - human rating
+  - optional exact human replacement
+  - no hidden Mind Trace packet
+  - no credential or capability capture
+     |
+     v
+SQLiteTuningStore
+  - immutable interaction hashes
+  - immutable feedback events
+  - versioned corrections
+  - one active correction
+  - hash-chained audit
+     |
+     v
+verify-tuning
+  - SQLite integrity
+  - content hashes
+  - correction uniqueness
+  - audit sequence and links
+     |
+     v
+export-tuning
+  - redacted by default
+  - atomic local files
+  - file SHA-256 values
+  - dataset digest
+     |
+     +--> sft.jsonl
+     +--> preference.jsonl
+     +--> evaluation-only.jsonl
+     +--> regression.jsonl
+     `--> manifest.json
+```
+
+Export does not upload data, start training, or activate a model. Human-derived
+regression cases are references that still require human judgment; they are not
+forced exact-string tests.
+
 ## Bella Operator boundary
 
 `src/bella_harness/operator/` keeps assistant behavior outside model weights:
@@ -207,6 +258,39 @@ The evaluation suite complements rather than replaces the deterministic red
 team. Red team evaluates the rule-based input boundary; Evaluation Gate tests
 candidate-model behavior beneath Bella Operator policy.
 
+## Bella tuning boundary
+
+`src/bella_harness/tuning/` contains:
+
+- `models.py` -- bounded interactions, ratings, corrections, and export decisions;
+- `store.py` -- SQLite schema, immutable history, versioned corrections, hashes,
+  and audit verification;
+- `secure_store.py` -- idempotent retry behavior, negative-only correction rules,
+  normalized validation, and export audit events;
+- `redaction.py` -- deterministic local redaction of common identifiers and keys;
+- `export.py` -- atomic JSONL files, file hashes, and dataset manifest;
+- `__init__.py` -- the public tuning API.
+
+Security and privacy properties:
+
+- ordinary `bella ask` never creates or writes the tuning store;
+- only explicit human review commands create records;
+- interaction IDs cannot be reused for different immutable content;
+- feedback is append-only;
+- corrections are versioned, and only one may be active;
+- a correction requires the latest feedback to be negative;
+- good responses cannot receive a replacement;
+- hidden memory context is not accepted by the schema or CLI;
+- redaction is the default export behavior;
+- exact unredacted export requires `--exact`;
+- export refuses an unverified store;
+- outputs are written atomically with best-effort owner-only permissions;
+- every export is recorded in the tuning audit chain;
+- no automatic upload, training, or model activation exists.
+
+The redaction layer detects common patterns but is not a complete PII classifier.
+A human must review any dataset before it leaves the trusted local environment.
+
 ## Output scanning
 
 After backend generation, `DeterministicEngine.scan_output()` withholds replies
@@ -225,7 +309,7 @@ The engine uses pure-Python normalization and regex decisions:
 
 This mechanical boundary does not claim to detect every semantic multi-step
 attack. Operator, memory, backend alignment, output scanning, exact action
-binding, and model evaluation provide separate layers.
+binding, model evaluation, and human review provide separate layers.
 
 ## Backends
 
@@ -245,17 +329,21 @@ literal secrets.
 - `operator` controls identity, mode, risk, and prompt wrapping.
 - `action_gate` controls only mock preview and authorization lifetimes.
 - `evaluation` pins local Ollama evaluation and optional candidate model tag.
+- `tuning` documents explicit capture, local store, redaction, upload, training,
+  and activation defaults. `store_path: null` requires `--db`.
 - minimal programmatic configs that omit newer sections keep legacy behavior;
-  the shipped default enables the bounded layers.
+  the shipped default enables the bounded layers without automatic capture.
 
 ## Verification
 
 `redteam/` contains 115 offline probes across 39 specialist agents. Pytest adds
 memory, operator, action fingerprint, risk-floor, expiration, replay, mutation,
 audit-chain, CLI proof, evaluation catalog, strict candidate JSON, all-or-nothing
-acceptance, report-integrity, cloud-rejection, and deterministic Ollama-option
-coverage.
+acceptance, report integrity, cloud rejection, deterministic Ollama options,
+SQLite tuning integrity, correction versioning, redaction, export hashes, and
+normal-chat non-capture coverage.
 
 `.github/workflows/redteam.yml` runs the full unit and red-team suites on Python
 3.10 and 3.12 and uploads both pytest output and red-team reports. Live Ollama
-evaluation is an explicit operator command and is not faked in CI.
+evaluation and real training are explicit operator workflows and are not faked
+in CI.
