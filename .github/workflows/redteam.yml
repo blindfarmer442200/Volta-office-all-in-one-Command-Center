@@ -24,6 +24,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Record project version and build timestamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(PYTHONPATH=src python -c 'from bella_harness.release_manifest import read_project_version; print(read_project_version("pyproject.toml"))')"
+          test -n "$version"
+          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
       - name: Compile source
         run: python -m compileall -q src scripts
 
@@ -62,9 +71,6 @@ jobs:
         with:
           name: redteam-report-py${{ matrix.python-version }}
           path: redteam-report.json
-
-      - name: Set reproducible build timestamp
-        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
       - name: Build wheel and source archive
         run: python -m build
@@ -112,12 +118,13 @@ jobs:
           .wheel-smoke/bin/bella doctor --json > bella-doctor.json
           .wheel-smoke/bin/python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           report = json.loads(Path("bella-doctor.json").read_text(encoding="utf-8"))
           assert report["schema"] == "bella.doctor-report.v1"
           assert report["ready"] is True
-          assert report["package_version"] == "0.2.0"
+          assert report["package_version"] == os.environ["PROJECT_VERSION"]
           PY
 
       - name: Build and verify release manifest
