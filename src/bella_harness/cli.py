@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import click
 
@@ -19,6 +20,15 @@ from bella_harness.deterministic.engine import Action
 from bella_harness.evaluation import BellaEvaluationGate, EvaluationError
 from bella_harness.harness import BellaHarness
 from bella_harness.operator import BellaMode
+from bella_harness.tuning import (
+    BellaTuningExporter,
+    FeedbackRating,
+    SQLiteTuningStore,
+    TuningError,
+)
+
+
+MAX_CLI_TEXT_FILE_BYTES = 256 * 1024
 
 
 @click.group()
@@ -28,6 +38,48 @@ def main(ctx: click.Context, config_path: str | None) -> None:
     """bella-harness: deterministic-first agent safety harness."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config_path
+
+
+def _read_cli_text(value: str, option_name: str) -> str:
+    """Read inline text or UTF-8 text from @path without printing its contents."""
+    if not value.startswith("@"):
+        return value
+    path = Path(value[1:]).expanduser()
+    try:
+        if not path.is_file():
+            raise click.BadParameter(
+                f"{option_name} file does not exist or is not a regular file",
+                param_hint=option_name,
+            )
+        if path.stat().st_size > MAX_CLI_TEXT_FILE_BYTES:
+            raise click.BadParameter(
+                f"{option_name} file exceeds the 256 KiB CLI safety limit",
+                param_hint=option_name,
+            )
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise click.BadParameter(
+            f"{option_name} file must be UTF-8 text",
+            param_hint=option_name,
+        ) from exc
+    except OSError as exc:
+        raise click.BadParameter(
+            f"unable to read {option_name} file: {exc}",
+            param_hint=option_name,
+        ) from exc
+
+
+def _tuning_store_path(ctx: click.Context, explicit_path: str | None) -> str:
+    if explicit_path:
+        return explicit_path
+    config = load_config(ctx.obj.get("config_path"))
+    tuning_config = config.get("tuning", {}) or {}
+    configured = tuning_config.get("store_path")
+    if not configured:
+        raise click.ClickException(
+            "no tuning database is configured; pass --db or set tuning.store_path"
+        )
+    return str(configured)
 
 
 @main.command()
@@ -230,6 +282,158 @@ def evaluate_bella(
         if not report.accepted:
             sys.exit(1)
     except (EvaluationError, BackendError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("review-response")
+@click.option("--db", "db_path", default=None, help="Path to the local SQLite tuning store.")
+@click.option("--interaction-id", required=True, help="Stable interaction identifier.")
+@click.option(
+    "--prompt",
+    required=True,
+    help="Original prompt text, or @path to a UTF-8 text file.",
+)
+@click.option(
+    "--response",
+    "original_response",
+    required=True,
+    help="Bella's original response, or @path to a UTF-8 text file.",
+)
+@click.option(
+    "--rating",
+    type=click.Choice([rating.value for rating in FeedbackRating], case_sensitive=False),
+    required=True,
+    help="Human review rating.",
+)
+@click.option(
+    "--corrected",
+    default=None,
+    help="Exact human replacement response, or @path. Optional for negative ratings.",
+)
+@click.option("--note", default="", help="Human review note, or @path.")
+@click.option(
+    "--mode",
+    type=click.Choice([mode.value for mode in BellaMode], case_sensitive=False),
+    default=BellaMode.DEFAULT.value,
+    show_default=True,
+)
+@click.option(
+    "--risk-level",
+    type=click.Choice(["low", "medium", "high", "critical"], case_sensitive=False),
+    default="low",
+    show_default=True,
+)
+@click.option("--profile-id", default="bella-core-v1", show_default=True)
+@click.option("--model", "source_model", required=True, help="Exact model tag that answered.")
+@click.pass_context
+def review_response(
+    ctx: click.Context,
+    db_path: str | None,
+    interaction_id: str,
+    prompt: str,
+    original_response: str,
+    rating: str,
+    corrected: str | None,
+    note: str,
+    mode: str,
+    risk_level: str,
+    profile_id: str,
+    source_model: str,
+) -> None:
+    """Explicitly record a human review and optional exact correction."""
+    try:
+        selected_rating = FeedbackRating(rating.lower())
+        if selected_rating.is_positive and corrected is not None:
+            raise click.ClickException(
+                "a good response must not include a replacement; use a negative rating to correct it"
+            )
+        store = SQLiteTuningStore(_tuning_store_path(ctx, db_path))
+        interaction = store.record_interaction(
+            interaction_id=interaction_id,
+            prompt=_read_cli_text(prompt, "--prompt"),
+            original_response=_read_cli_text(original_response, "--response"),
+            mode=mode.lower(),
+            risk_level=risk_level.lower(),
+            profile_id=profile_id,
+            source_model=source_model,
+        )
+        feedback = store.add_feedback(
+            interaction_id=interaction.id,
+            rating=selected_rating,
+            note=_read_cli_text(note, "--note") if note else "",
+        )
+        correction = None
+        if corrected is not None:
+            correction = store.add_correction(
+                interaction_id=interaction.id,
+                corrected_response=_read_cli_text(corrected, "--corrected"),
+                rationale=_read_cli_text(note, "--note") if note else "",
+            )
+        click.echo(json.dumps({
+            "schema": "bella.tuning-review-result.v1",
+            "interaction_id": interaction.id,
+            "feedback_id": feedback.id,
+            "rating": feedback.rating.value,
+            "correction_id": correction.id if correction else None,
+            "correction_version": correction.version if correction else None,
+            "store_verified": store.verify_integrity(),
+            "conversation_auto_saved": False,
+            "training_started": False,
+            "model_activated": False,
+        }, sort_keys=True))
+    except (TuningError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("verify-tuning")
+@click.option("--db", "db_path", default=None, help="Path to the local SQLite tuning store.")
+@click.pass_context
+def verify_tuning(ctx: click.Context, db_path: str | None) -> None:
+    """Verify SQLite integrity, content hashes, correction uniqueness, and audit chain."""
+    try:
+        store = SQLiteTuningStore(_tuning_store_path(ctx, db_path))
+        verified = store.verify_integrity()
+        click.echo(json.dumps({
+            "schema": "bella.tuning-verification.v1",
+            "verified": verified,
+        }, sort_keys=True))
+        if not verified:
+            sys.exit(1)
+    except (TuningError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("export-tuning")
+@click.option("--db", "db_path", default=None, help="Path to the local SQLite tuning store.")
+@click.option("--output-dir", required=True, help="Directory for local JSONL artifacts.")
+@click.option(
+    "--exact",
+    is_flag=True,
+    help="Explicitly export unredacted reviewed text. Default export is redacted.",
+)
+@click.pass_context
+def export_tuning(
+    ctx: click.Context,
+    db_path: str | None,
+    output_dir: str,
+    exact: bool,
+) -> None:
+    """Export reviewed SFT, preference, evaluation, and regression data locally."""
+    try:
+        store = SQLiteTuningStore(_tuning_store_path(ctx, db_path))
+        manifest = BellaTuningExporter(store).export(output_dir, redacted=not exact)
+        click.echo(json.dumps({
+            "schema": manifest["schema"],
+            "export_id": manifest["export_id"],
+            "redacted": manifest["redacted"],
+            "redaction_replacements": manifest["redaction_replacements"],
+            "dataset_sha256": manifest["dataset_sha256"],
+            "files": manifest["files"],
+            "automatic_upload_performed": False,
+            "training_started": False,
+            "model_activated": False,
+        }, sort_keys=True))
+    except (TuningError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
 
