@@ -63,6 +63,8 @@ service:
   request_timeout_seconds: 90
   rate_limit_requests: 60
   rate_limit_window_seconds: 60
+  auth_failure_limit_requests: 20
+  auth_failure_limit_window_seconds: 60
   trusted_hosts:
     - localhost
     - 127.0.0.1
