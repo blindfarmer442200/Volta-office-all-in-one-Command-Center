@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -21,26 +23,159 @@ class _FakeResponse:
         return self._json_data
 
 
-def test_ollama_backend_generate(monkeypatch):
-    def fake_post(url, json, timeout):
-        assert url.endswith("/api/generate")
-        return _FakeResponse({"response": "hello there"})
+class _FakeStreamResponse:
+    def __init__(self, json_data=None, *, raw=None, status_code=200, headers=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._raw = raw if raw is not None else json.dumps(json_data or {}).encode("utf-8")
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError("error", request=None, response=self)
+
+    def iter_bytes(self):
+        midpoint = max(1, len(self._raw) // 2)
+        yield self._raw[:midpoint]
+        yield self._raw[midpoint:]
+
+
+def test_ollama_backend_generate_uses_bounded_private_stream(monkeypatch):
+    captured = {}
+
+    def fake_stream(method, url, json, timeout, follow_redirects):
+        captured.update(
+            method=method,
+            url=url,
+            payload=json,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
+        return _FakeStreamResponse({"response": "hello there"})
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
     backend = OllamaBackend({"base_url": "http://localhost:11434", "model": "llama3.1"})
     response = backend.generate("hi")
     assert response.text == "hello there"
     assert response.backend_name == "ollama"
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/api/generate")
+    assert captured["follow_redirects"] is False
 
 
 def test_ollama_backend_raises_backend_error_on_http_failure(monkeypatch):
-    def fake_post(url, json, timeout):
+    def fake_stream(*args, **kwargs):
         raise httpx.ConnectError("connection refused")
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "stream", fake_stream)
     backend = OllamaBackend({"base_url": "http://localhost:11434", "model": "llama3.1"})
     with pytest.raises(BackendError):
         backend.generate("hi")
+
+
+def test_ollama_rejects_redirects_malformed_json_and_oversized_response(monkeypatch):
+    backend = OllamaBackend(
+        {
+            "base_url": "http://localhost:11434",
+            "model": "llama3.1",
+            "max_response_bytes": 1024,
+        }
+    )
+
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        lambda *args, **kwargs: _FakeStreamResponse({}, status_code=302),
+    )
+    with pytest.raises(BackendError, match="redirect"):
+        backend.generate("hi")
+
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        lambda *args, **kwargs: _FakeStreamResponse(raw=b"not-json"),
+    )
+    with pytest.raises(BackendError, match="valid JSON"):
+        backend.generate("hi")
+
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        lambda *args, **kwargs: _FakeStreamResponse(
+            raw=b"{}", headers={"content-length": "2048"}
+        ),
+    )
+    with pytest.raises(BackendError, match="byte limit"):
+        backend.generate("hi")
+
+
+def test_ollama_rejects_public_hostname_credentials_path_and_public_ip():
+    unsafe = [
+        "https://ollama.example.com",
+        "http://user:pass@localhost:11434",
+        "http://localhost:11434/prefix",
+        "http://8.8.8.8:11434",
+    ]
+    for base_url in unsafe:
+        with pytest.raises(BackendError, match="unsafe Ollama endpoint"):
+            OllamaBackend({"base_url": base_url, "model": "llama3.1"})
+
+
+def test_ollama_accepts_loopback_private_ipv4_and_private_ipv6():
+    assert OllamaBackend({"base_url": "http://127.0.0.1:11434", "model": "m"}).base_url == (
+        "http://127.0.0.1:11434"
+    )
+    assert OllamaBackend({"base_url": "http://192.168.1.20:11434", "model": "m"}).base_url == (
+        "http://192.168.1.20:11434"
+    )
+    assert OllamaBackend({"base_url": "http://[fd00::1]:11434/", "model": "m"}).base_url == (
+        "http://[fd00::1]:11434"
+    )
+
+
+def test_ollama_prompt_model_and_output_bounds(monkeypatch):
+    backend = OllamaBackend(
+        {
+            "base_url": "http://localhost:11434",
+            "model": "llama3.1",
+            "max_prompt_chars": 1000,
+            "max_output_chars": 1000,
+        }
+    )
+    with pytest.raises(BackendError, match="prompt exceeds"):
+        backend.generate("x" * 1001)
+    with pytest.raises(BackendError, match="control characters"):
+        backend.generate("hi", model="bad\nmodel")
+
+    monkeypatch.setattr(
+        httpx,
+        "stream",
+        lambda *args, **kwargs: _FakeStreamResponse({"response": "x" * 1001}),
+    )
+    with pytest.raises(BackendError, match="generated text exceeds"):
+        backend.generate("hi")
+
+
+def test_ollama_health_check_uses_tags_without_prompt(monkeypatch):
+    captured = {}
+
+    def fake_stream(method, url, json, timeout, follow_redirects):
+        captured.update(method=method, url=url, payload=json)
+        return _FakeStreamResponse({"models": []})
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
+    backend = OllamaBackend({"base_url": "http://localhost:11434", "model": "llama3.1"})
+    assert backend.health_check()
+    assert captured == {
+        "method": "GET",
+        "url": "http://localhost:11434/api/tags",
+        "payload": None,
+    }
 
 
 def test_openai_backend_requires_api_key(monkeypatch):
@@ -71,19 +206,17 @@ def test_backend_abstraction_orders_default_backend_first():
         },
     }
     with pytest.raises(BackendError):
-        # openai is first (default) but has no key -> constructing should fail fast
         BackendAbstraction(config)
 
 
 def test_backend_abstraction_falls_back_on_error(monkeypatch):
-    call_order = []
+    calls = []
 
-    def fake_post(url, json, timeout):
-        call_order.append(url)
+    def fake_stream(method, url, **kwargs):
+        calls.append(url)
         raise httpx.ConnectError("down")
 
-    monkeypatch.setattr(httpx, "post", fake_post)
-
+    monkeypatch.setattr(httpx, "stream", fake_stream)
     config = {
         "harness": {"default_backend": "ollama"},
         "backends": {
@@ -93,7 +226,7 @@ def test_backend_abstraction_falls_back_on_error(monkeypatch):
     ba = BackendAbstraction(config)
     with pytest.raises(BackendError):
         ba.generate("hi")
-    assert call_order  # confirms the backend was actually invoked
+    assert calls
 
 
 def test_anthropic_backend_requires_api_key(monkeypatch):
@@ -152,19 +285,19 @@ def test_openrouter_backend_generate(monkeypatch):
 
 
 def test_backend_abstraction_falls_back_to_second_backend(monkeypatch):
-    """Default backend fails at call time; abstraction falls back to the next
-    enabled backend and returns its response."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     seen = []
 
+    def fake_stream(method, url, **kwargs):
+        seen.append(url)
+        raise httpx.ConnectError("ollama down")
+
     def fake_post(url, json, **kwargs):
         seen.append(url)
-        if "11434" in url:  # ollama (the default) is down
-            raise httpx.ConnectError("ollama down")
         return _FakeResponse({"choices": [{"message": {"content": "served by openai"}}]})
 
+    monkeypatch.setattr(httpx, "stream", fake_stream)
     monkeypatch.setattr(httpx, "post", fake_post)
-
     config = {
         "harness": {"default_backend": "ollama"},
         "backends": {
@@ -173,11 +306,11 @@ def test_backend_abstraction_falls_back_to_second_backend(monkeypatch):
         },
     }
     ba = BackendAbstraction(config)
-    assert ba.order[0] == "ollama"  # default is tried first
+    assert ba.order[0] == "ollama"
     response = ba.generate("hi")
     assert response.text == "served by openai"
     assert response.backend_name == "openai"
-    assert any("11434" in u for u in seen)  # ollama was attempted before falling back
+    assert any("11434" in url for url in seen)
 
 
 def test_backend_abstraction_pinned_backend_does_not_fall_back(monkeypatch):
