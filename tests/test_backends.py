@@ -142,16 +142,22 @@ def test_ollama_rejects_public_hostname_credentials_path_and_public_ip():
             OllamaBackend(_ollama_config(base_url=base_url))
 
 
-def test_ollama_accepts_loopback_private_ipv4_and_private_ipv6():
+def test_ollama_accepts_loopback_and_explicitly_approved_private_http():
     assert OllamaBackend(_ollama_config(base_url="http://127.0.0.1:11434")).base_url == (
         "http://127.0.0.1:11434"
     )
-    assert OllamaBackend(_ollama_config(base_url="http://192.168.1.20:11434")).base_url == (
-        "http://192.168.1.20:11434"
-    )
-    assert OllamaBackend(_ollama_config(base_url="http://[fd00::1]:11434/")).base_url == (
-        "http://[fd00::1]:11434"
-    )
+    assert OllamaBackend(
+        _ollama_config(
+            base_url="http://192.168.1.20:11434",
+            allow_insecure_private_http=True,
+        )
+    ).base_url == "http://192.168.1.20:11434"
+    assert OllamaBackend(
+        _ollama_config(
+            base_url="http://[fd00::1]:11434/",
+            allow_insecure_private_http=True,
+        )
+    ).base_url == "http://[fd00::1]:11434"
 
 
 def test_ollama_prompt_model_output_timeout_and_temperature_bounds(monkeypatch):
