@@ -77,4 +77,7 @@ def test_installed_entrypoint_registers_json_doctor_command():
     assert payload["schema"] == "bella.doctor-report.v1"
     assert payload["ready"] is True
     assert any(check["name"] == "ollama_endpoint" for check in payload["checks"])
-    assert "prompt" not in result.output.lower()
+    lowered = result.output.lower()
+    assert "memory_ids" not in lowered
+    assert "original_response" not in lowered
+    assert "api_key" not in lowered
