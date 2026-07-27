@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bella-harness"
-version = "0.1.0"
-description = "Deterministic-first agent safety harness with multi-backend LLM support"
+version = "0.2.0"
+description = "Deterministic-first Bella agent harness with governed memory, evaluation, and action boundaries"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -19,6 +19,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "build>=1.2",
 ]
 
 [project.scripts]
@@ -26,6 +27,9 @@ bella = "bella_harness.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+bella_harness = ["default.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "redteam"]
