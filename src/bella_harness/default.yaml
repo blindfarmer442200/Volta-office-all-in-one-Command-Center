@@ -108,7 +108,7 @@ backends:
   openrouter:
     enabled: false
     api_key_env: OPENROUTER_API_KEY
-    base_url: https://openrouter.ai/v1
+    base_url: https://openrouter.ai/api/v1
     model: meta-llama/llama-3.1-70b-instruct
     timeout_seconds: 60
 
