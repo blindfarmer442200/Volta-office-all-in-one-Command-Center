@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from urllib.parse import urlsplit
 
@@ -21,6 +22,15 @@ DEFAULT_MAX_OUTPUT_CHARS = 200_000
 ABSOLUTE_MAX_RESPONSE_BYTES = 5_000_000
 
 
+def _host_is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 class OllamaBackend(Backend):
     """Local-first Ollama adapter with fail-closed network and size bounds."""
 
@@ -34,7 +44,24 @@ class OllamaBackend(Backend):
             )
         except PrivateEndpointError as exc:
             raise BackendError(f"unsafe Ollama endpoint: {exc}") from exc
-        self.host = urlsplit(self.base_url).hostname or ""
+
+        parsed_base_url = urlsplit(self.base_url)
+        self.host = parsed_base_url.hostname or ""
+        allow_insecure_private_http = config.get("allow_insecure_private_http", False)
+        if not isinstance(allow_insecure_private_http, bool):
+            raise BackendError("ollama allow_insecure_private_http must be boolean")
+        self.allow_insecure_private_http = allow_insecure_private_http
+        if (
+            parsed_base_url.scheme == "http"
+            and not _host_is_loopback(self.host)
+            and not self.allow_insecure_private_http
+        ):
+            raise BackendError(
+                "remote private Ollama endpoints must use https; set "
+                "allow_insecure_private_http=true only for an explicitly trusted "
+                "encrypted VPN or isolated LAN"
+            )
+
         self.max_prompt_chars = self._bounded_int(
             config.get("max_prompt_chars", DEFAULT_MAX_PROMPT_CHARS),
             name="max_prompt_chars",
