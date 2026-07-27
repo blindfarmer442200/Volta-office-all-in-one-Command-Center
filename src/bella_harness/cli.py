@@ -7,6 +7,12 @@ import sys
 
 import click
 
+from bella_harness.action_gate import (
+    ActionGateError,
+    ActionKind,
+    ActionSpec,
+    ActionValidationError,
+)
 from bella_harness.deterministic.engine import Action
 from bella_harness.harness import BellaHarness
 from bella_harness.operator import BellaMode
@@ -59,6 +65,107 @@ def ask(ctx: click.Context, prompt: str, mode: str, as_json: bool) -> None:
 
     if result.action == Action.BLOCK:
         sys.exit(1)
+
+
+@main.command("sandbox-action")
+@click.argument("request_text")
+@click.option(
+    "--kind",
+    type=click.Choice([kind.value for kind in ActionKind], case_sensitive=False),
+    required=True,
+    help="Exact mock action kind.",
+)
+@click.option("--target", required=True, help="Exact reviewed target.")
+@click.option(
+    "--payload",
+    "payload_json",
+    required=True,
+    help="Exact JSON object payload.",
+)
+@click.option(
+    "--mode",
+    type=click.Choice([mode.value for mode in BellaMode], case_sensitive=False),
+    default=BellaMode.DEFAULT.value,
+    show_default=True,
+    help="Bella operating mode.",
+)
+@click.option(
+    "--confirm",
+    is_flag=True,
+    help=(
+        "Explicitly confirm and consume the one-use capability in the local mock "
+        "sandbox. This is not biometric identity proof and cannot create side effects."
+    ),
+)
+@click.pass_context
+def sandbox_action(
+    ctx: click.Context,
+    request_text: str,
+    kind: str,
+    target: str,
+    payload_json: str,
+    mode: str,
+    confirm: bool,
+) -> None:
+    """Preview or simulate one exact action with zero external side effects."""
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(
+            f"payload must be valid JSON: {exc.msg}",
+            param_hint="--payload",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise click.BadParameter(
+            "payload must decode to a JSON object",
+            param_hint="--payload",
+        )
+
+    try:
+        spec = ActionSpec(kind=kind, target=target, payload=payload)
+        harness = BellaHarness(config_path=ctx.obj.get("config_path"))
+        preview = harness.prepare_action(request_text, spec, mode=mode)
+        output = {
+            "schema": "bella.action-demo.v1",
+            "preview": {
+                "id": preview.id,
+                "status": preview.status.value,
+                "connector": preview.spec.connector,
+                "kind": preview.spec.kind.value,
+                "target": preview.spec.target,
+                "payload": preview.spec.payload,
+                "fingerprint": preview.fingerprint,
+                "risk_level": preview.risk_level.value,
+                "expires_at": preview.expires_at,
+                "summary": preview.summary,
+            },
+            "confirmed": False,
+            "execution": None,
+        }
+        if confirm:
+            authorization = harness.authorize_action(
+                preview.id,
+                preview.fingerprint,
+                owner_confirmed=True,
+            )
+            execution = harness.execute_sandbox_action(
+                preview.id,
+                spec,
+                preview.fingerprint,
+                authorization.capability,
+            )
+            output["confirmed"] = True
+            output["authorization_expires_at"] = authorization.expires_at
+            output["execution"] = {
+                "status": "simulated",
+                "executed_at": execution.executed_at,
+                "simulated": execution.simulated,
+                "sideEffectsPerformed": execution.side_effects_performed,
+                "result": execution.result,
+            }
+        click.echo(json.dumps(output, ensure_ascii=False, sort_keys=True))
+    except (ActionGateError, ActionValidationError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command()
