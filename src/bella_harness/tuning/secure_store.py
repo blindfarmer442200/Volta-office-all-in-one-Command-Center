@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Any
 
 from bella_harness.tuning.models import (
     FeedbackRating,
     TuningFeedback,
-    TuningStoreError if False else TuningValidationError,
+    TuningValidationError,
     validate_id,
 )
 from bella_harness.tuning.store import SQLiteTuningStore as _BaseSQLiteTuningStore
