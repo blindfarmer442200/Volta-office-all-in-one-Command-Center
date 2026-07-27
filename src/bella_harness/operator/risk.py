@@ -97,11 +97,30 @@ _MEDIUM_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "draft or preview of a consequential action",
         re.compile(
             r"\b(draft|prepare|preview|propose|review)\b"
-            r".{0,50}\b(email|message|contract|agreement|payment|calendar|filing|application|record)\b",
+            r".{0,50}\b(email|message|contract|agreement|payment|calendar|filing|application|record)",
             re.IGNORECASE,
         ),
     ),
 )
+
+_EXPLICIT_EXECUTION = re.compile(
+    r"\b(send|forward|post|publish|submit|schedule|book|cancel|reschedule|"
+    r"transfer|wire|pay|purchase|buy|refund|charge|delete|erase|wipe|destroy|"
+    r"purge|unlock|disable|turn\s+on)\b",
+    re.IGNORECASE,
+)
+
+
+def _medium_decision(selected_mode: BellaMode, reason: str) -> OperatorDecision:
+    return OperatorDecision(
+        mode=selected_mode,
+        risk_level=RiskLevel.MEDIUM,
+        approval_required=False,
+        reasons=(reason,),
+        plan=(
+            "Explain the recommendation, uncertainty, and what should be reviewed by the human.",
+        ),
+    )
 
 
 def classify_request(request_text: str, mode: str | BellaMode = BellaMode.DEFAULT) -> OperatorDecision:
@@ -124,6 +143,10 @@ def classify_request(request_text: str, mode: str | BellaMode = BellaMode.DEFAUL
                 ),
             )
 
+    preview_reason, preview_pattern = _MEDIUM_RULES[1]
+    if preview_pattern.search(text) and not _EXPLICIT_EXECUTION.search(text):
+        return _medium_decision(selected_mode, preview_reason)
+
     for reason, pattern in _HIGH_RULES:
         if pattern.search(text):
             return OperatorDecision(
@@ -141,15 +164,7 @@ def classify_request(request_text: str, mode: str | BellaMode = BellaMode.DEFAUL
 
     for reason, pattern in _MEDIUM_RULES:
         if pattern.search(text):
-            return OperatorDecision(
-                mode=selected_mode,
-                risk_level=RiskLevel.MEDIUM,
-                approval_required=False,
-                reasons=(reason,),
-                plan=(
-                    "Explain the recommendation, uncertainty, and what should be reviewed by the human.",
-                ),
-            )
+            return _medium_decision(selected_mode, reason)
 
     return OperatorDecision(
         mode=selected_mode,
